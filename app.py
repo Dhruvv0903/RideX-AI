@@ -93,7 +93,6 @@ if uploaded:
 
     for _, row in history.iterrows():
         d = row["date"]
-
         gap = max((d - prev_date).days, 1) if prev_date is not None else 1
 
         atl *= np.exp(-gap / 7)
@@ -155,8 +154,40 @@ if uploaded:
     else:
         st.error("Fatigued")
 
+    # ---------------- TOMORROW ----------------
+    st.subheader("🔮 Tomorrow Prediction")
+
+    preds = []
+
+    for name, load in {"Rest": 0, "Light": 30, "Hard": 60}.items():
+
+        atl_next = history["ATL"].iloc[-1] * np.exp(-1/7) + load
+        ctl_next = history["CTL"].iloc[-1] * np.exp(-1/42) + load * 0.5
+        tsb_next = ctl_next - atl_next
+
+        preds.append({
+            "Scenario": name,
+            "ATL": round(atl_next, 1),
+            "CTL": round(ctl_next, 1),
+            "TSB": round(tsb_next, 1)
+        })
+
+    st.dataframe(pd.DataFrame(preds))
+
+    # ---------------- RECOMMENDATION ----------------
+    st.subheader("🧠 Recommendation")
+
+    if gap > 7:
+        st.success("Ease back in — long recovery detected")
+    elif tsb < -10:
+        st.warning("Rest tomorrow")
+    elif tsb > 10:
+        st.success("You can push hard tomorrow")
+    else:
+        st.info("Light ride recommended")
+
 # =========================
-# ⚡ LIVE RIDE MODE (FIXED)
+# ⚡ LIVE RIDE MODE
 # =========================
 
 st.divider()
@@ -184,46 +215,42 @@ if live:
                     continue
 
                 intensity = hr / max_hr
+                dt = 1
 
-                # 🔥 FIXED FATIGUE MODEL (bounded)
                 fatigue_rate = (intensity ** 3) * 25
-                fatigue += fatigue_rate * 0.05
+                fatigue += fatigue_rate * dt / 60
                 fatigue = min(fatigue, 100)
 
-                # ⏱ FIXED TTE (never negative)
                 if fatigue >= 99:
-                    tte = 0
+                    tte_minutes = 0
                 elif fatigue_rate > 0:
-                    tte = int((100 - fatigue) / (fatigue_rate + 1e-6))
+                    tte_seconds = (100 - fatigue) / (fatigue_rate / 60)
+                    tte_minutes = tte_seconds / 60
                 else:
-                    tte = 999
+                    tte_minutes = 999
 
-                # 🎯 HR ZONE
                 optimal_low = int(max_hr * 0.65)
                 optimal_high = int(max_hr * 0.75)
 
-                # 🧠 DECISION ENGINE
                 if fatigue > 85:
-                    decision = "🛑 Near exhaustion — back off immediately"
+                    decision = "🛑 Near exhaustion — back off"
                 elif fatigue > 70:
-                    decision = "⚠️ High fatigue — reduce effort"
+                    decision = "⚠️ Reduce effort"
                 elif intensity > 0.85:
-                    decision = "⚠️ Unsustainable — will burn out"
+                    decision = "⚠️ Too intense"
                 elif intensity > 0.7:
-                    decision = "⚖️ Strong pace — monitor fatigue"
+                    decision = "⚖️ Strong pace"
                 elif intensity > 0.6:
-                    decision = "✅ Sustainable endurance pace"
+                    decision = "✅ Sustainable"
                 else:
-                    decision = "🔥 You can push harder"
+                    decision = "🔥 Push more"
 
                 with placeholder.container():
-
                     st.metric("Heart Rate", int(hr))
                     st.metric("Fatigue (0-100)", round(fatigue, 1))
-                    st.metric("Time to Exhaustion (sec)", tte)
+                    st.metric("Time to Exhaustion (min)", round(tte_minutes, 1))
 
-                    st.info(f"🎯 Optimal HR Zone: {optimal_low}-{optimal_high}")
+                    st.info(f"🎯 Optimal HR: {optimal_low}-{optimal_high}")
                     st.subheader(decision)
 
-                # 🐢 SLOWER FOR VISUALIZATION
-                time.sleep(0.15)
+                time.sleep(0.2)
