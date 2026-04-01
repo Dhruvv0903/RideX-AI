@@ -47,7 +47,6 @@ st.download_button(
 # ---------------- FILE UPLOAD ----------------
 uploaded_file = st.file_uploader("Upload ride file", type=["csv", "tcx"])
 
-
 # ---------------- TCX PARSER ----------------
 def parse_tcx(file):
     tree = ET.parse(file)
@@ -56,6 +55,7 @@ def parse_tcx(file):
     ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
     data = []
+
     prev_time = None
     prev_dist = None
 
@@ -79,11 +79,9 @@ def parse_tcx(file):
             if time_diff > 0 and dist_diff >= 0:
                 speed = (dist_diff / time_diff) * 3.6
 
-                # Remove unrealistic spikes
+                # cap unrealistic spikes
                 if speed > 80:
                     speed = 0
-            else:
-                speed = 0
 
         data.append({
             'heart_rate': int(hr.text) if hr is not None else 0,
@@ -95,8 +93,13 @@ def parse_tcx(file):
         prev_time = curr_time
         prev_dist = curr_dist
 
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
 
+    # smooth speed
+    if 'speed' in df.columns:
+        df['speed'] = df['speed'].rolling(5, min_periods=1).mean()
+
+    return df
 
 # ---------------- NORMALIZATION ----------------
 def normalize_data(df):
@@ -122,7 +125,6 @@ def normalize_data(df):
 
     return df
 
-
 # ---------------- HELPERS ----------------
 def fatigue_zone(score):
     if score < 40:
@@ -131,7 +133,6 @@ def fatigue_zone(score):
         return "🟡 Moderate Fatigue"
     else:
         return "🔴 High Fatigue"
-
 
 def generate_insights(df):
     insights = []
@@ -165,7 +166,6 @@ def generate_insights(df):
 
     return insights
 
-
 # ---------------- MAIN ----------------
 if uploaded_file:
 
@@ -174,10 +174,8 @@ if uploaded_file:
 
         if file_name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
-
         elif file_name.endswith(".tcx"):
             df = parse_tcx(uploaded_file)
-
         else:
             st.error("Unsupported file format.")
             st.stop()
@@ -187,12 +185,12 @@ if uploaded_file:
 
         df = normalize_data(df)
 
-        # Smooth speed AFTER parsing
-        df['speed'] = df['speed'].rolling(5, min_periods=1).mean()
-
         if df['heart_rate'].sum() == 0:
             st.error("No valid heart rate data found.")
             st.stop()
+
+        # detect if speed existed originally
+        original_speed_missing = df['speed'].sum() == 0
 
         df['duration_min'] = df.index / 60
 
@@ -226,11 +224,20 @@ if uploaded_file:
 
         st.pyplot(fig)
 
+        # ---------------- METRICS ----------------
         col1, col2, col3 = st.columns(3)
+
         col1.metric("Max Fatigue", df['fatigue_score'].max())
         col2.metric("Average Fatigue", round(df['fatigue_score'].mean(), 1))
-        col3.metric("Avg Speed", round(df['speed'].mean(), 1))
+        col3.metric("Avg Speed (computed)", round(df['speed'].mean(), 1))
 
+        # explain speed logic
+        st.caption("ℹ️ Speed is derived from distance and time when not directly available.")
+
+        if original_speed_missing:
+            st.info("Speed data was not present in the file — calculated using distance/time.")
+
+        # ---------------- ZONES ----------------
         st.subheader("⏱ Time in Zones")
 
         total = len(df)
@@ -242,10 +249,12 @@ if uploaded_file:
         st.write(f"🟡 Moderate: {round(moderate/total*100,1)}%")
         st.write(f"🔴 High: {round(high/total*100,1)}%")
 
+        # ---------------- SUMMARY ----------------
         st.subheader("📊 Ride Summary")
         st.write(f"Peak Fatigue: {df['fatigue_score'].max()}")
         st.write(f"Time in High Fatigue: {high} data points")
 
+        # ---------------- VERDICT ----------------
         st.subheader("🏁 Final Verdict")
 
         if latest < 40:
@@ -255,6 +264,7 @@ if uploaded_file:
         else:
             st.error("High fatigue — recovery strongly recommended.")
 
+        # ---------------- INSIGHTS ----------------
         st.subheader("🧠 Insights")
         for insight in generate_insights(df):
             st.write("- " + insight)
