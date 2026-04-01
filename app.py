@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
 import time
+from io import BytesIO
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
@@ -15,6 +16,22 @@ age = st.sidebar.number_input("Age", 10, 80, 18)
 resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 60)
 
 max_hr = 220 - age
+
+# ---------------- CACHE LOADER ----------------
+@st.cache_data
+def load_file_cached(file_bytes, filename):
+    file = BytesIO(file_bytes)
+
+    if filename.endswith(".tcx"):
+        return parse_tcx_safe(file)
+    else:
+        df = pd.read_csv(file)
+
+        if "heart_rate" not in df.columns:
+            return pd.DataFrame()
+
+        df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="s")
+        return df
 
 # ---------------- SAFE TCX PARSER ----------------
 def parse_tcx_safe(file):
@@ -44,33 +61,20 @@ def parse_tcx_safe(file):
 
         return df
 
-    except Exception as e:
-        st.error(f"TCX parsing failed: {e}")
+    except Exception:
         return pd.DataFrame()
-
-# ---------------- LOAD FILE ----------------
-def load_file(file):
-    if file.name.endswith(".tcx"):
-        return parse_tcx_safe(file)
-    else:
-        df = pd.read_csv(file)
-        if "heart_rate" not in df.columns:
-            st.error("CSV must have heart_rate column")
-            return pd.DataFrame()
-        df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="s")
-        return df
 
 # ---------------- FATIGUE MODEL ----------------
 def compute_load(df):
     df = df.copy()
-
     df["intensity"] = df["heart_rate"] / max_hr
     df["intensity"] = df["intensity"].clip(0, 1)
-
-    # Smarter load (non-linear)
     df["load"] = df["intensity"] ** 2 * 100
-
     return df
+
+# ---------------- SESSION STATE ----------------
+if "history" not in st.session_state:
+    st.session_state.history = None
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
@@ -79,64 +83,60 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-history = []
-
 if uploaded_files:
 
+    history = []
+
     for file in uploaded_files:
-        df = load_file(file)
+        df = load_file_cached(file.read(), file.name)
 
         if df.empty:
             continue
 
+        # 🔥 DOWNSAMPLING (huge speed boost)
+        df = df.iloc[::5]
+
         df = compute_load(df)
 
-        avg_load = df["load"].mean()
-        avg_hr = df["heart_rate"].mean()
-
-        # extract date
-        ride_date = df["time"].iloc[0]
-
         history.append({
-            "date": ride_date,
-            "load": avg_load,
-            "avg_hr": avg_hr
+            "date": df["time"].iloc[0],
+            "load": df["load"].mean(),
+            "avg_hr": df["heart_rate"].mean()
         })
 
     history = pd.DataFrame(history)
 
-    # ---------------- DATE FIX ----------------
     history["date"] = pd.to_datetime(history["date"]).dt.tz_localize(None)
     history = history.sort_values("date").reset_index(drop=True)
+
+    st.session_state.history = history
+
+# ---------------- USE STORED HISTORY ----------------
+history = st.session_state.history
+
+if history is not None:
 
     st.subheader(f"📁 {len(history)} ride(s) processed")
     st.dataframe(history)
 
-    # ---------------- TRAINING LOAD MODEL ----------------
-    atl_list = []
-    ctl_list = []
-
-    atl = 0
-    ctl = 0
+    # ---------------- TRAINING LOAD ----------------
+    atl, ctl = 0, 0
+    atl_list, ctl_list = [], []
 
     prev_date = None
 
-    for i, row in history.iterrows():
+    for _, row in history.iterrows():
 
         current_date = row["date"]
 
         if prev_date is not None:
-            gap = (current_date - prev_date).days
+            gap = max((current_date - prev_date).days, 1)
         else:
             gap = 1
 
-        gap = max(gap, 1)
-
-        # decay over gap
         atl *= np.exp(-gap / 7)
         ctl *= np.exp(-gap / 42)
 
-        # add load
         atl += row["load"] * (1 - np.exp(-1/7))
         ctl += row["load"] * (1 - np.exp(-1/42))
 
@@ -152,10 +152,10 @@ if uploaded_files:
     # ---------------- METRICS ----------------
     st.subheader("📊 Training Load")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("ATL (Fatigue)", round(history["ATL"].iloc[-1], 1))
-    col2.metric("CTL (Fitness)", round(history["CTL"].iloc[-1], 1))
-    col3.metric("TSB (Form)", round(history["TSB"].iloc[-1], 1))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("ATL (Fatigue)", round(history["ATL"].iloc[-1], 1))
+    c2.metric("CTL (Fitness)", round(history["CTL"].iloc[-1], 1))
+    c3.metric("TSB (Form)", round(history["TSB"].iloc[-1], 1))
 
     st.info("""
     ATL = short-term fatigue  
@@ -172,17 +172,14 @@ if uploaded_files:
     ax.plot(history["date"], history["TSB"], label="TSB")
 
     ax.legend()
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Load")
-
     plt.xticks(rotation=45)
     st.pyplot(fig)
 
     # ---------------- GAP AWARENESS ----------------
     today = pd.Timestamp.now().tz_localize(None)
     last_date = history["date"].iloc[-1]
-
     days_since = (today - last_date).days
+
     st.write(f"📅 Days since last ride: {days_since}")
 
     # ---------------- READINESS ----------------
@@ -200,56 +197,46 @@ if uploaded_files:
     st.subheader("🧠 Readiness")
     st.success(readiness)
 
-    # ---------------- TOMORROW PREDICTION ----------------
+    # ---------------- TOMORROW ----------------
     st.subheader("🔮 Tomorrow Prediction")
 
-    scenarios = {
-        "Rest": 0,
-        "Light": 30,
-        "Hard": 60
-    }
-
-    predictions = []
+    scenarios = {"Rest":0, "Light":30, "Hard":60}
+    preds = []
 
     for name, load in scenarios.items():
-
-        atl_next = history["ATL"].iloc[-1] * np.exp(-1/7) + load
-        ctl_next = history["CTL"].iloc[-1] * np.exp(-1/42) + load
+        atl_next = history["ATL"].iloc[-1]*np.exp(-1/7) + load
+        ctl_next = history["CTL"].iloc[-1]*np.exp(-1/42) + load
         tsb_next = ctl_next - atl_next
 
-        predictions.append({
+        preds.append({
             "Scenario": name,
             "ATL": round(atl_next,1),
             "CTL": round(ctl_next,1),
             "TSB": round(tsb_next,1)
         })
 
-    pred_df = pd.DataFrame(predictions)
-    st.dataframe(pred_df)
+    st.dataframe(pd.DataFrame(preds))
 
-    # recommendation
     if tsb_now < -10:
         st.warning("Rest tomorrow")
     elif tsb_now > 10:
         st.success("Push hard tomorrow")
     else:
-        st.info("Do a light ride tomorrow")
+        st.info("Light ride recommended")
 
 # ---------------- LIVE MODE ----------------
 st.divider()
-st.header("⚡ Live Ride Mode (Simulation)")
+st.header("⚡ Live Ride Mode")
 
-uploaded_live = st.file_uploader(
-    "Upload file for live simulation",
-    type=["csv", "tcx"],
-    key="live"
-)
+uploaded_live = st.file_uploader("Upload for simulation", type=["csv","tcx"], key="live")
 
 if uploaded_live:
 
-    df_live = load_file(uploaded_live)
+    df_live = load_file_cached(uploaded_live.read(), uploaded_live.name)
 
     if not df_live.empty:
+
+        df_live = df_live.iloc[::3]  # faster simulation
 
         if st.button("▶️ Start Simulation"):
 
@@ -259,7 +246,6 @@ if uploaded_live:
             for i in range(len(df_live)):
 
                 hr = df_live.iloc[i]["heart_rate"]
-
                 if hr == 0:
                     continue
 
@@ -267,8 +253,6 @@ if uploaded_live:
                 fatigue += intensity * 0.4
 
                 with placeholder.container():
-                    st.subheader("🚴 Live Ride")
-
                     st.metric("Heart Rate", int(hr))
                     st.metric("Fatigue", round(fatigue,1))
 
@@ -279,7 +263,4 @@ if uploaded_live:
                     else:
                         st.error("Hard")
 
-                    if fatigue > 70:
-                        st.error("⚠️ Slow down")
-
-                time.sleep(0.05)
+                time.sleep(0.01)
