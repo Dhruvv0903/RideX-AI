@@ -151,7 +151,7 @@ else:
 
 
 # ==============================
-# HISTORY
+# HISTORY + LOAD
 # ==============================
 if history:
     history_df = pd.DataFrame(history).sort_values("date")
@@ -174,12 +174,18 @@ if history:
     c2.metric("CTL", f"{CTL:.1f}")
     c3.metric("TSB", f"{TSB:.1f}")
 
-    st.info("""
-    ATL = Acute Training Load (fatigue)  
-    CTL = Chronic Training Load (fitness)  
-    TSB = Training Stress Balance (readiness)
-    """)
+    # ==============================
+    # DAYS SINCE LAST (RESTORED)
+    # ==============================
+    last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
+    today = pd.Timestamp.now().tz_localize(None)
+    gap = (today - last_date).days
 
+    st.write(f"📅 Days since last ride: {gap}")
+
+    # ==============================
+    # GRAPH
+    # ==============================
     fig, ax = plt.subplots()
     ax.plot(history_df["date"], history_df["ATL"], label="ATL")
     ax.plot(history_df["date"], history_df["CTL"], label="CTL")
@@ -190,35 +196,22 @@ if history:
     st.pyplot(fig)
 
     # ==============================
-    # TOMORROW PREDICTION (FIXED)
+    # TOMORROW (FIXED LOGIC)
     # ==============================
     st.subheader("🔮 Tomorrow Prediction")
 
-    rows = []
-    scenarios = ["Rest", "Light", "Hard"]
+    if gap > 5:
+        rec = "Light"
+    elif TSB < -10:
+        rec = "Rest"
+    elif TSB <= 5:
+        rec = "Light"
+    else:
+        rec = "Hard"
 
-    for i, load in enumerate([0, 30, 60]):
-        atl_n = ATL + (load - ATL) / 7
-        ctl_n = CTL + (load - CTL) / 42
-        tsb_n = ctl_n - atl_n
-
-        rows.append({
-            "Scenario": scenarios[i],
-            "ATL": round(atl_n, 1),
-            "CTL": round(ctl_n, 1),
-            "TSB": round(tsb_n, 1)
-        })
-
-    pred_df = pd.DataFrame(rows)
-    st.dataframe(pred_df)
-
-    # 🔥 BEST DECISION (THIS WAS MISSING)
-    best_row = pred_df.loc[pred_df["TSB"].idxmax()]
-    best_scenario = best_row["Scenario"]
-
-    if best_scenario == "Rest":
-        st.success("🛑 Recommended: Rest Day")
-    elif best_scenario == "Light":
+    if rec == "Rest":
+        st.warning("🛑 Recommended: Rest Day")
+    elif rec == "Light":
         st.info("🚴 Recommended: Light Ride")
     else:
         st.success("🔥 Recommended: Hard Training Day")
