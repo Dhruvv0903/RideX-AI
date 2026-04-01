@@ -18,7 +18,7 @@ resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 70)
 max_hr = 220 - age
 
 # ==============================
-# PARSERS (CACHED)
+# PARSERS
 # ==============================
 @st.cache_data
 def parse_tcx(file_bytes):
@@ -73,18 +73,16 @@ def compute_fatigue(df, resting_hr, max_hr):
 
 
 # ==============================
-# REALISTIC SAMPLE DATA (FIXED)
+# SAMPLE DATA
 # ==============================
 def generate_sample_rides():
     rides = []
-
     base_date = pd.Timestamp.now()
 
-    for d in range(5):  # 5 rides
+    for d in range(5):
         times = pd.date_range(end=base_date - pd.Timedelta(days=d),
                               periods=200, freq="s")
 
-        # realistic cycling HR curve
         hr = 120 + 25 * np.sin(np.linspace(0, 6, 200)) + np.random.normal(0, 3, 200)
 
         df = pd.DataFrame({
@@ -108,9 +106,6 @@ mode = st.radio("Mode", ["Upload Files", "Sample Data"])
 history = []
 all_hr = []
 
-# ==============================
-# LOAD DATA
-# ==============================
 if mode == "Upload Files":
     files = st.file_uploader("Upload TCX/CSV", type=["tcx", "csv"], accept_multiple_files=True)
 
@@ -156,7 +151,7 @@ else:
 
 
 # ==============================
-# HISTORY + GRAPH
+# HISTORY
 # ==============================
 if history:
     history_df = pd.DataFrame(history).sort_values("date")
@@ -185,59 +180,52 @@ if history:
     TSB = Training Stress Balance (readiness)
     """)
 
-    # ===== FIXED GRAPH =====
     fig, ax = plt.subplots()
     ax.plot(history_df["date"], history_df["ATL"], label="ATL")
     ax.plot(history_df["date"], history_df["CTL"], label="CTL")
     ax.plot(history_df["date"], history_df["TSB"], label="TSB")
-
     ax.legend()
     plt.xticks(rotation=30)
     plt.tight_layout()
-
     st.pyplot(fig)
 
     # ==============================
-    # READINESS
-    # ==============================
-    last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
-    today = pd.Timestamp.now().tz_localize(None)
-
-    days_since = (today - last_date).days
-    st.write(f"📅 Days since last ride: {days_since}")
-
-    if days_since > 7:
-        st.success("Fresh — recovered")
-    elif TSB > 10:
-        st.success("Fresh — push hard")
-    elif TSB < -10:
-        st.warning("Fatigued — recover")
-    else:
-        st.info("Moderate — train smart")
-
-    # ==============================
-    # TOMORROW
+    # TOMORROW PREDICTION (FIXED)
     # ==============================
     st.subheader("🔮 Tomorrow Prediction")
 
     rows = []
-    for load in [0, 30, 60]:
+    scenarios = ["Rest", "Light", "Hard"]
+
+    for i, load in enumerate([0, 30, 60]):
         atl_n = ATL + (load - ATL) / 7
         ctl_n = CTL + (load - CTL) / 42
         tsb_n = ctl_n - atl_n
 
         rows.append({
-            "Scenario": ["Rest", "Light", "Hard"][len(rows)],
+            "Scenario": scenarios[i],
             "ATL": round(atl_n, 1),
             "CTL": round(ctl_n, 1),
             "TSB": round(tsb_n, 1)
         })
 
-    st.dataframe(pd.DataFrame(rows))
+    pred_df = pd.DataFrame(rows)
+    st.dataframe(pred_df)
+
+    # 🔥 BEST DECISION (THIS WAS MISSING)
+    best_row = pred_df.loc[pred_df["TSB"].idxmax()]
+    best_scenario = best_row["Scenario"]
+
+    if best_scenario == "Rest":
+        st.success("🛑 Recommended: Rest Day")
+    elif best_scenario == "Light":
+        st.info("🚴 Recommended: Light Ride")
+    else:
+        st.success("🔥 Recommended: Hard Training Day")
 
 
 # ==============================
-# LIVE MODE (FIXED SPEED)
+# LIVE MODE
 # ==============================
 st.subheader("⚡ Live Ride Mode")
 
@@ -288,4 +276,4 @@ if "df_live" in locals() and not df_live.empty:
                 st.info(f"Adaptive Zone: {int(zone_low)} - {int(zone_high)} bpm")
                 st.success(decision)
 
-            time.sleep(0.08)  # slowed to human speed
+            time.sleep(0.08)
