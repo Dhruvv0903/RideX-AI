@@ -7,10 +7,8 @@ import numpy as np
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
-
 st.title("🚴 RideX AI — Performance Engine")
 
-# ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
     "Upload ride files",
     type=["csv", "tcx"],
@@ -32,8 +30,6 @@ def parse_tcx(file):
         time_elem = tp.find('.//ns:Time', ns)
         dist_elem = tp.find('.//ns:DistanceMeters', ns)
         hr = tp.find('.//ns:HeartRateBpm/ns:Value', ns)
-        cadence = tp.find('.//ns:Cadence', ns)
-        altitude = tp.find('.//ns:AltitudeMeters', ns)
 
         curr_time = pd.to_datetime(time_elem.text) if time_elem is not None else None
         curr_dist = float(dist_elem.text) if dist_elem is not None else None
@@ -47,14 +43,12 @@ def parse_tcx(file):
             if dt > 0 and dd >= 0:
                 speed = (dd / dt) * 3.6
                 if speed > 80:
-                    speed = 0.0
+                    speed = 0
 
         data.append({
             "time": curr_time,
             "heart_rate": int(hr.text) if hr is not None else 0,
-            "cadence": int(cadence.text) if cadence is not None else 0,
-            "elevation_m": float(altitude.text) if altitude is not None else 0,
-            "speed": float(speed)
+            "speed": speed
         })
 
         prev_time, prev_dist = curr_time, curr_dist
@@ -67,48 +61,36 @@ def parse_tcx(file):
     return df
 
 
-# ---------------- NORMALIZATION ----------------
-def normalize(df):
-    df.columns = df.columns.str.lower().str.replace("-", "_")
-    for col in ["heart_rate", "cadence", "speed", "elevation_m"]:
-        if col not in df.columns:
-            df[col] = 0
-    return df
-
-
-# ---------------- PERSONALIZATION ----------------
+# ---------------- HR CALIBRATION ----------------
 def calibrate_hr(df):
-    valid_hr = df[df["heart_rate"] > 0]["heart_rate"]
+    valid = df[df["heart_rate"] > 0]["heart_rate"]
 
-    if len(valid_hr) < 10:
-        return 60, 180  # fallback
+    if len(valid) < 10:
+        return 60, 180
 
-    resting = valid_hr.quantile(0.05)
-    max_hr = valid_hr.quantile(0.95)
-
-    return resting, max_hr
+    return valid.quantile(0.05), valid.quantile(0.95)
 
 
-def compute_relative_effort(hr, resting, max_hr):
-    if max_hr - resting <= 0:
+def relative_effort(hr, rest, max_hr):
+    if max_hr - rest <= 0:
         return 0
-
-    effort = (hr - resting) / (max_hr - resting)
-    return max(0, min(effort, 1))
+    return max(0, min((hr - rest) / (max_hr - rest), 1))
 
 
-def compute_personalized_fatigue(df, resting, max_hr):
-    efforts = []
+# ---------------- ADAPTIVE MODEL ----------------
+def get_adaptive_params(history):
+    if len(history) < 3:
+        return 1.0, 1.0  # default
 
-    for i, row in df.iterrows():
-        effort = compute_relative_effort(row["heart_rate"], resting, max_hr)
+    fatigue_trend = history["fatigue"].mean()
 
-        # fatigue = effort weighted by time + slight elevation influence
-        fatigue = effort * (i / 60 + 1) + 0.0005 * row["elevation_m"]
+    # if user fatigues easily → reduce sensitivity
+    fatigue_multiplier = 1.0 + (fatigue_trend / 100)
 
-        efforts.append(fatigue * 100)
+    # recovery sensitivity
+    recovery_rate = max(0.8, 1.2 - (fatigue_trend / 200))
 
-    return efforts
+    return fatigue_multiplier, recovery_rate
 
 
 # ---------------- MAIN ----------------
@@ -118,52 +100,47 @@ if uploaded_files:
 
     for file in uploaded_files:
 
-        name = file.name.lower()
-
-        if name.endswith(".tcx"):
+        if file.name.endswith(".tcx"):
             df = parse_tcx(file)
-        elif name.endswith(".csv"):
-            df = pd.read_csv(file)
-            df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="S")
         else:
             continue
-
-        df = normalize(df)
 
         if df["heart_rate"].sum() == 0:
             continue
 
-        # ---------------- HR PERSONALIZATION ----------------
-        resting_hr, max_hr = calibrate_hr(df)
+        rest, max_hr = calibrate_hr(df)
 
-        df["fatigue_score"] = compute_personalized_fatigue(df, resting_hr, max_hr)
+        efforts = []
+        for i, row in df.iterrows():
+            e = relative_effort(row["heart_rate"], rest, max_hr)
+            efforts.append(e)
 
-        avg_fatigue = np.mean(df["fatigue_score"])
-        avg_hr = df["heart_rate"].mean()
+        df["effort"] = efforts
 
-        valid_speed = df[df["speed"] > 0]["speed"]
-        avg_speed = valid_speed.mean() if len(valid_speed) > 0 else None
+        avg_effort = np.mean(efforts)
 
-        ride_date = df["time"].iloc[0]
+        duration_min = len(df) / 60
+
+        # ---------------- SCALING FIX ----------------
+        avg_fatigue = avg_effort * 100
+        load = avg_fatigue * (duration_min / 60)
+
+        avg_speed = df[df["speed"] > 0]["speed"].mean()
 
         history.append({
-            "date": ride_date,
+            "date": df["time"].iloc[0],
             "fatigue": avg_fatigue,
-            "load": avg_fatigue * len(df) / 100,
-            "avg_hr": avg_hr,
+            "load": load,
             "avg_speed": avg_speed
         })
 
-    history = pd.DataFrame(history)
-
-    if len(history) == 0:
-        st.error("No valid rides.")
-        st.stop()
-
-    history = history.sort_values("date").reset_index(drop=True)
+    history = pd.DataFrame(history).sort_values("date").reset_index(drop=True)
 
     st.subheader(f"📂 {len(history)} ride(s) processed")
     st.dataframe(history)
+
+    # ---------------- ADAPTIVE ----------------
+    fatigue_mult, recovery_rate = get_adaptive_params(history)
 
     # ---------------- TRAINING LOAD ----------------
     ATL, CTL = [], []
@@ -176,18 +153,13 @@ if uploaded_files:
             days = 1
         else:
             days = (row["date"] - last_date).days
-            if days <= 0:
-                days = 1
-            elif days > 30:
-                atl *= 0.3
-                ctl *= 0.7
-                days = 1
+            days = max(1, min(days, 30))
 
         decay_atl = pow(0.5, days / 7)
         decay_ctl = pow(0.5, days / 42)
 
-        atl = atl * decay_atl + row["load"]
-        ctl = ctl * decay_ctl + row["load"]
+        atl = atl * decay_atl + row["load"] * 0.1 * fatigue_mult
+        ctl = ctl * decay_ctl + row["load"] * 0.05 * recovery_rate
 
         ATL.append(atl)
         CTL.append(ctl)
@@ -198,6 +170,7 @@ if uploaded_files:
     history["CTL"] = CTL
     history["TSB"] = history["CTL"] - history["ATL"]
 
+    # ---------------- METRICS ----------------
     st.subheader("📊 Training Load")
 
     col1, col2, col3 = st.columns(3)
@@ -208,13 +181,13 @@ if uploaded_files:
     st.info("""
 ATL = short-term fatigue  
 CTL = long-term fitness  
-TSB = readiness (positive = fresh, negative = fatigued)
+TSB = readiness
 """)
 
     # ---------------- GRAPH ----------------
     st.subheader("📈 Training Load Trend")
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    fig, ax = plt.subplots()
 
     ax.plot(history["date"], history["ATL"], label="ATL")
     ax.plot(history["date"], history["CTL"], label="CTL")
@@ -222,9 +195,7 @@ TSB = readiness (positive = fresh, negative = fatigued)
 
     ax.legend()
 
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d\n%Y'))
-
     plt.xticks(rotation=30)
 
     st.pyplot(fig)
@@ -232,40 +203,33 @@ TSB = readiness (positive = fresh, negative = fatigued)
     # ---------------- READINESS ----------------
     st.subheader("🧠 Readiness")
 
-    latest_tsb = history["TSB"].iloc[-1]
+    tsb = history["TSB"].iloc[-1]
 
-    if latest_tsb > 10:
-        st.success("Fresh — ready for hard effort")
-    elif latest_tsb > -10:
-        st.warning("Balanced — moderate training recommended")
+    if tsb > 10:
+        st.success("Fresh — push hard")
+    elif tsb > -10:
+        st.warning("Moderate — train smart")
     else:
-        st.error("Fatigued — recovery needed")
+        st.error("Fatigued — recover")
 
     # ---------------- PREDICTION ----------------
     st.subheader("🔮 Tomorrow Prediction")
 
-    recent = history[
-        history["date"] > (history["date"].max() - pd.Timedelta(days=14))
-    ]
-
-    if len(recent) > 0:
-        atl_now = recent["ATL"].iloc[-1]
-        ctl_now = recent["CTL"].iloc[-1]
-    else:
-        atl_now = history["ATL"].iloc[-1]
-        ctl_now = history["CTL"].iloc[-1]
+    atl_now = history["ATL"].iloc[-1]
+    ctl_now = history["CTL"].iloc[-1]
 
     scenarios = {
         "Rest": 0,
-        "Light": 30,
-        "Hard": 70
+        "Light": 20,
+        "Hard": 50
     }
 
     preds = []
 
     for name, load in scenarios.items():
+
         new_atl = atl_now * 0.7 + load
-        new_ctl = ctl_now * 0.95 + load
+        new_ctl = ctl_now * 0.95 + load * 0.5
         tsb = new_ctl - new_atl
 
         preds.append({
@@ -280,9 +244,9 @@ TSB = readiness (positive = fresh, negative = fatigued)
     # ---------------- RECOMMENDATION ----------------
     st.subheader("🧠 Recommendation")
 
-    if latest_tsb < -15:
-        st.warning("You should rest tomorrow.")
-    elif latest_tsb < 5:
-        st.info("Go for a light ride.")
+    if tsb < -15:
+        st.warning("Rest tomorrow")
+    elif tsb < 5:
+        st.info("Light ride recommended")
     else:
-        st.success("You can push hard tomorrow.")
+        st.success("Push hard tomorrow")
