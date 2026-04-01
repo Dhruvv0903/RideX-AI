@@ -45,7 +45,6 @@ def load_file(file_bytes, name):
             df.rename(columns={"heart_rate":"hr"}, inplace=True)
 
         df["time"] = pd.to_datetime(df["time"]).dt.tz_localize(None)
-
         return df
 
     except:
@@ -56,8 +55,6 @@ def compute_load(df):
     df = df.copy()
     df["intensity"] = df["hr"] / max_hr
     df["intensity"] = df["intensity"].clip(0, 1)
-
-    # slightly more realistic scaling
     df["load"] = (df["intensity"]**2) * 80
     return df
 
@@ -74,7 +71,7 @@ if uploaded:
         if df.empty:
             continue
 
-        df = df.iloc[::5]  # speed boost
+        df = df.iloc[::5]
         df = compute_load(df)
 
         history.append({
@@ -83,8 +80,7 @@ if uploaded:
             "avg_hr": df["hr"].mean()
         })
 
-    history = pd.DataFrame(history)
-    history = history.sort_values("date").reset_index(drop=True)
+    history = pd.DataFrame(history).sort_values("date").reset_index(drop=True)
 
     st.subheader("📁 Processed Rides")
     st.dataframe(history)
@@ -98,12 +94,8 @@ if uploaded:
     for _, row in history.iterrows():
         d = row["date"]
 
-        if prev_date is not None:
-            gap = max((d - prev_date).days, 1)
-        else:
-            gap = 1
+        gap = max((d - prev_date).days, 1) if prev_date is not None else 1
 
-        # decay based on REAL time gap
         atl *= np.exp(-gap / 7)
         ctl *= np.exp(-gap / 42)
 
@@ -123,15 +115,9 @@ if uploaded:
     st.subheader("📊 Training Load")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("ATL (Fatigue)", round(history["ATL"].iloc[-1],1))
-    c2.metric("CTL (Fitness)", round(history["CTL"].iloc[-1],1))
-    c3.metric("TSB (Form)", round(history["TSB"].iloc[-1],1))
-
-    st.info("""
-    ATL = short-term fatigue  
-    CTL = long-term fitness  
-    TSB = readiness  
-    """)
+    c1.metric("ATL", round(history["ATL"].iloc[-1],1))
+    c2.metric("CTL", round(history["CTL"].iloc[-1],1))
+    c3.metric("TSB", round(history["TSB"].iloc[-1],1))
 
     # ---------------- GRAPH ----------------
     st.subheader("📈 Trend")
@@ -155,49 +141,20 @@ if uploaded:
     tsb = history["TSB"].iloc[-1]
 
     if gap > 7:
-        readiness = "Recovered (long gap)"
+        st.success("Recovered (long gap)")
     elif tsb > 10:
-        readiness = "Fresh"
+        st.success("Fresh")
     elif tsb > -10:
-        readiness = "Moderate"
+        st.warning("Moderate")
     else:
-        readiness = "Fatigued"
+        st.error("Fatigued")
 
-    st.subheader("🧠 Readiness")
-    st.success(readiness)
+# =========================
+# ⚡ LIVE RIDE MODE (PACE ENGINE)
+# =========================
 
-    # ---------------- SMART TOMORROW ----------------
-    st.subheader("🔮 Tomorrow Prediction")
-
-    preds = []
-
-    for name, load in {"Rest":0, "Light":30, "Hard":60}.items():
-
-        atl_next = history["ATL"].iloc[-1]*np.exp(-1/7) + load
-        ctl_next = history["CTL"].iloc[-1]*np.exp(-1/42) + load*0.5
-        tsb_next = ctl_next - atl_next
-
-        preds.append({
-            "Scenario": name,
-            "ATL": round(atl_next,1),
-            "CTL": round(ctl_next,1),
-            "TSB": round(tsb_next,1)
-        })
-
-    st.dataframe(pd.DataFrame(preds))
-
-    if gap > 7:
-        st.success("Ease back in (don't go hard)")
-    elif tsb < -10:
-        st.warning("Rest tomorrow")
-    elif tsb > 10:
-        st.success("Push hard tomorrow")
-    else:
-        st.info("Light ride recommended")
-
-# ---------------- LIVE MODE (UPGRADED) ----------------
 st.divider()
-st.header("⚡ Live Ride Mode")
+st.header("⚡ Live Ride Mode — Pacing Engine")
 
 live = st.file_uploader("Upload for simulation", key="live")
 
@@ -214,38 +171,54 @@ if live:
             placeholder = st.empty()
 
             fatigue = 0
-            fatigue_rate = 0
 
             for i in range(len(df_live)):
 
                 hr = df_live.iloc[i]["hr"]
-
                 if hr == 0:
                     continue
 
                 intensity = hr / max_hr
 
-                # fatigue accumulation
-                fatigue_rate = intensity * 0.6
-                fatigue += fatigue_rate
+                # 🔥 EXPONENTIAL FATIGUE MODEL
+                fatigue_rate = (intensity ** 3) * 120
+                fatigue += fatigue_rate * 0.1
 
-                # 🔥 FUTURE PREDICTION
+                # 🔮 FUTURE SIMULATION (5 mins)
+                sim_fatigue = fatigue
+                sim_rate = fatigue_rate
+
+                for _ in range(50):
+                    sim_rate = (intensity ** 3) * 120
+                    sim_fatigue += sim_rate * 0.1
+
+                # ⏱ TIME TO EXHAUSTION
                 if fatigue_rate > 0:
-                    minutes_to_exhaust = max(1, int((100 - fatigue) / (fatigue_rate * 10)))
+                    tte = int((100 - fatigue) / (fatigue_rate + 1e-5))
                 else:
-                    minutes_to_exhaust = 999
+                    tte = 999
+
+                # 🎯 OPTIMAL HR ZONE
+                optimal_low = int(max_hr * 0.65)
+                optimal_high = int(max_hr * 0.75)
+
+                # 🧠 DECISION ENGINE
+                if intensity > 0.85:
+                    decision = "⚠️ Too hard — back off now"
+                elif intensity > 0.75:
+                    decision = "⚖️ On limit — hold carefully"
+                elif intensity > 0.6:
+                    decision = "✅ Sustainable pace"
+                else:
+                    decision = "🔥 You can push harder"
 
                 with placeholder.container():
 
                     st.metric("Heart Rate", int(hr))
                     st.metric("Fatigue", round(fatigue,1))
-                    st.metric("Time to fatigue (min)", minutes_to_exhaust)
+                    st.metric("Time to Exhaustion (sec)", tte)
 
-                    if intensity < 0.6:
-                        st.success("Easy")
-                    elif intensity < 0.8:
-                        st.warning("Moderate")
-                    else:
-                        st.error("Too Hard — unsustainable")
+                    st.info(f"🎯 Optimal HR Zone: {optimal_low} - {optimal_high}")
+                    st.subheader(decision)
 
                 time.sleep(0.01)
