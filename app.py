@@ -76,8 +76,14 @@ def parse_tcx(file):
             time_diff = (curr_time - prev_time).total_seconds()
             dist_diff = curr_dist - prev_dist
 
-            if time_diff > 0:
-                speed = (dist_diff / time_diff) * 3.6  # m/s → km/h
+            if time_diff > 0 and dist_diff >= 0:
+    speed = (dist_diff / time_diff) * 3.6
+
+    # sanity cap (cycling realistic upper bound)
+    if speed > 80:
+        speed = 0
+else:
+    speed = 0
 
         data.append({
             'heart_rate': int(hr.text) if hr is not None else 0,
@@ -91,7 +97,7 @@ def parse_tcx(file):
 
     return pd.DataFrame(data)
 
-
+df['speed'] = df['speed'].rolling(5, min_periods=1).mean()
 # ---------------- NORMALIZATION ----------------
 def normalize_data(df):
     df.columns = df.columns.str.lower().str.replace('-', '_')
