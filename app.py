@@ -57,16 +57,37 @@ def parse_tcx(file):
 
     data = []
 
+    prev_time = None
+    prev_dist = None
+
     for trackpoint in root.findall('.//ns:Trackpoint', ns):
+
+        time_elem = trackpoint.find('.//ns:Time', ns)
+        dist_elem = trackpoint.find('.//ns:DistanceMeters', ns)
         hr = trackpoint.find('.//ns:HeartRateBpm/ns:Value', ns)
         cadence = trackpoint.find('.//ns:Cadence', ns)
         altitude = trackpoint.find('.//ns:AltitudeMeters', ns)
 
+        curr_time = pd.to_datetime(time_elem.text) if time_elem is not None else None
+        curr_dist = float(dist_elem.text) if dist_elem is not None else None
+
+        speed = 0
+        if prev_time is not None and prev_dist is not None and curr_time is not None and curr_dist is not None:
+            time_diff = (curr_time - prev_time).total_seconds()
+            dist_diff = curr_dist - prev_dist
+
+            if time_diff > 0:
+                speed = (dist_diff / time_diff) * 3.6  # m/s → km/h
+
         data.append({
             'heart_rate': int(hr.text) if hr is not None else 0,
             'cadence': int(cadence.text) if cadence is not None else 0,
-            'elevation_m': float(altitude.text) if altitude is not None else 0
+            'elevation_m': float(altitude.text) if altitude is not None else 0,
+            'speed': speed
         })
+
+        prev_time = curr_time
+        prev_dist = curr_dist
 
     return pd.DataFrame(data)
 
@@ -112,7 +133,12 @@ def generate_insights(df):
     max_fatigue = df['fatigue_score'].max()
     avg_fatigue = df['fatigue_score'].mean()
 
-    low_cadence_pct = (df['cadence'] < 70).sum() / len(df) * 100
+    valid_cadence = df[df['cadence'] > 0]
+
+    if len(valid_cadence) > 0:
+        low_cadence_pct = (valid_cadence['cadence'] < 70).sum() / len(valid_cadence) * 100
+    else:
+        low_cadence_pct = 0
 
     if max_fatigue > 70:
         insights.append("⚠️ You entered high fatigue levels — recovery ride recommended.")
@@ -134,13 +160,12 @@ def generate_insights(df):
     return insights
 
 
-# ---------------- MAIN LOGIC ----------------
+# ---------------- MAIN ----------------
 if uploaded_file:
 
     try:
         file_name = uploaded_file.name.lower()
 
-        # Detect file type
         if file_name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
 
@@ -148,24 +173,20 @@ if uploaded_file:
             df = parse_tcx(uploaded_file)
 
         else:
-            st.error("Unsupported file format. Upload CSV or TCX.")
+            st.error("Unsupported file format.")
             st.stop()
 
         st.subheader("📄 Raw Data Preview")
         st.dataframe(df.head())
 
-        # Normalize
         df = normalize_data(df)
 
-        # Validate heart rate
         if df['heart_rate'].sum() == 0:
             st.error("No valid heart rate data found.")
             st.stop()
 
-        # Duration approximation
         df['duration_min'] = df.index / 60
 
-        # Calculate fatigue
         df['fatigue_score'] = df.apply(
             lambda row: calculate_fatigue(
                 row['heart_rate'],
@@ -179,7 +200,6 @@ if uploaded_file:
 
         latest = df['fatigue_score'].iloc[-1]
 
-        # ---------------- OUTPUT ----------------
         st.subheader("📍 Current State")
         st.write(f"Fatigue Level: {fatigue_zone(latest)}")
 
@@ -203,6 +223,7 @@ if uploaded_file:
         col3.metric("Avg Speed", round(df['speed'].mean(), 1))
 
         st.subheader("⏱ Time in Zones")
+
         total = len(df)
         low = (df['fatigue_score'] < 40).sum()
         moderate = ((df['fatigue_score'] >= 40) & (df['fatigue_score'] < 65)).sum()
@@ -217,6 +238,7 @@ if uploaded_file:
         st.write(f"Time in High Fatigue: {high} data points")
 
         st.subheader("🏁 Final Verdict")
+
         if latest < 40:
             st.success("Endurance ride — you can train again tomorrow.")
         elif latest < 65:
