@@ -22,7 +22,6 @@ max_hr = 220 - age
 @st.cache_data
 def parse_tcx(file_bytes):
     root = ET.fromstring(file_bytes)
-
     ns = {"ns": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
 
     data = []
@@ -57,7 +56,7 @@ def parse_csv(file_bytes):
 
 
 @st.cache_data
-def compute_fatigue_cached(df, resting_hr, max_hr):
+def compute_fatigue(df, resting_hr, max_hr):
     fatigue = 0
     fatigue_list = []
 
@@ -76,15 +75,17 @@ def compute_fatigue_cached(df, resting_hr, max_hr):
 
 
 # ==============================
-# SAMPLE DATA
+# SAMPLE DATA (FIXED)
 # ==============================
-@st.cache_data
 def generate_sample_data():
-    times = pd.date_range(end=pd.Timestamp.now(), periods=300, freq="S")
+    now = pd.Timestamp.now()
+    times = pd.date_range(end=now, periods=300, freq="s")
+
     hr = 120 + 20 * pd.Series(range(300)).apply(lambda x: (x % 50) / 2)
 
     df = pd.DataFrame({"time": times, "hr": hr})
     df["delta"] = 1
+
     return df
 
 
@@ -108,13 +109,10 @@ if mode == "Upload Files":
         for f in files:
             bytes_data = f.read()
 
-            if f.name.endswith(".tcx"):
-                df = parse_tcx(bytes_data)
-            else:
-                df = parse_csv(bytes_data)
+            df = parse_tcx(bytes_data) if f.name.endswith(".tcx") else parse_csv(bytes_data)
 
             if not df.empty:
-                df = compute_fatigue_cached(df, resting_hr, max_hr)
+                df = compute_fatigue(df, resting_hr, max_hr)
 
                 all_hr.extend(df["hr"].tolist())
 
@@ -126,7 +124,7 @@ if mode == "Upload Files":
 
 else:
     df = generate_sample_data()
-    df = compute_fatigue_cached(df, resting_hr, max_hr)
+    df = compute_fatigue(df, resting_hr, max_hr)
 
     all_hr.extend(df["hr"].tolist())
 
@@ -179,7 +177,6 @@ if history:
     TSB = Training Stress Balance (readiness)
     """)
 
-    # Chart
     fig, ax = plt.subplots()
     ax.plot(history_df["date"], history_df["ATL"], label="ATL")
     ax.plot(history_df["date"], history_df["CTL"], label="CTL")
@@ -187,9 +184,6 @@ if history:
     ax.legend()
     st.pyplot(fig)
 
-    # ==============================
-    # DATE + READINESS
-    # ==============================
     last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
     today = pd.Timestamp.now().tz_localize(None)
 
@@ -241,7 +235,7 @@ if history:
 
 
 # ==============================
-# LIVE MODE (FAST)
+# LIVE MODE
 # ==============================
 st.subheader("⚡ Live Ride Mode — Smart Pacing")
 
@@ -257,14 +251,14 @@ else:
     df_live = generate_sample_data()
 
 if "df_live" in locals() and not df_live.empty:
-    df_live = compute_fatigue_cached(df_live, resting_hr, max_hr)
+    df_live = compute_fatigue(df_live, resting_hr, max_hr)
 
     if st.button("▶ Start Simulation"):
 
         placeholder = st.empty()
         smoothed_hr = None
 
-        for i in range(0, len(df_live), 8):  # faster skip
+        for i in range(0, len(df_live), 8):
 
             row = df_live.iloc[i]
             hr = row["hr"]
@@ -272,7 +266,6 @@ if "df_live" in locals() and not df_live.empty:
 
             smoothed_hr = hr if smoothed_hr is None else 0.85 * smoothed_hr + 0.15 * hr
 
-            # HR logic
             if smoothed_hr < zone_low:
                 decision = "🔥 Push more"
             elif zone_low <= smoothed_hr <= zone_high:
@@ -282,7 +275,6 @@ if "df_live" in locals() and not df_live.empty:
             else:
                 decision = "🚨 Too intense"
 
-            # fatigue limiter
             if fatigue > 85:
                 decision = "🛑 STOP — exhaustion imminent"
             elif fatigue > 70:
@@ -294,4 +286,4 @@ if "df_live" in locals() and not df_live.empty:
                 st.info(f"Adaptive Zone: {int(zone_low)} - {int(zone_high)} bpm")
                 st.success(decision)
 
-            time.sleep(0.04)  # smooth + faster
+            time.sleep(0.04)
