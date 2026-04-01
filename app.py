@@ -1,292 +1,285 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
 import time
-import os
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
 st.title("🚴 RideX AI — Performance Engine")
 
-# ---------------- RIDER PROFILE ----------------
+# ---------------- USER INPUT ----------------
 st.sidebar.header("👤 Rider Profile")
-
 age = st.sidebar.number_input("Age", 10, 80, 18)
 resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 60)
 
 max_hr = 220 - age
-st.sidebar.write(f"Estimated Max HR: {max_hr}")
 
-# ---------------- LIVE HR FILE ----------------
-HR_FILE = "hr_live.txt"
+# ---------------- SAFE TCX PARSER ----------------
+def parse_tcx_safe(file):
+    try:
+        tree = ET.parse(file)
+        root = tree.getroot()
+        ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
-def read_live_hr():
-    if os.path.exists(HR_FILE):
-        with open(HR_FILE, "r") as f:
-            lines = f.readlines()
-            if lines:
-                try:
-                    return int(lines[-1].strip())
-                except:
-                    return None
-    return None
-st.divider()
-st.header("⚡ Live Ride Mode (Simulation from File)")
+        data = []
 
-uploaded_live = st.file_uploader(
-    "Upload a ride file to simulate live tracking",
-    type=["csv", "tcx"],
-    key="live_sim"
-)
+        for tp in root.findall('.//ns:Trackpoint', ns):
+            hr = tp.find('.//ns:HeartRateBpm/ns:Value', ns)
+            time_elem = tp.find('.//ns:Time', ns)
 
-def load_live_data(file):
-    if file.name.endswith(".tcx"):
-        return parse_tcx(file)
-    else:
-        df = pd.read_csv(file)
-        df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="S")
+            data.append({
+                "heart_rate": int(hr.text) if hr is not None else 0,
+                "time": pd.to_datetime(time_elem.text) if time_elem is not None else None
+            })
+
+        df = pd.DataFrame(data)
+
+        if df.empty:
+            return df
+
+        if df["time"].isnull().all():
+            df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="s")
+
         return df
 
-if uploaded_live:
+    except Exception as e:
+        st.error(f"TCX parsing failed: {e}")
+        return pd.DataFrame()
 
-    df_live = load_live_data(uploaded_live)
+# ---------------- LOAD FILE ----------------
+def load_file(file):
+    if file.name.endswith(".tcx"):
+        return parse_tcx_safe(file)
+    else:
+        df = pd.read_csv(file)
+        if "heart_rate" not in df.columns:
+            st.error("CSV must have heart_rate column")
+            return pd.DataFrame()
+        df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="s")
+        return df
 
-    if st.button("▶️ Start Simulation"):
+# ---------------- FATIGUE MODEL ----------------
+def compute_load(df):
+    df = df.copy()
 
-        placeholder = st.empty()
+    df["intensity"] = df["heart_rate"] / max_hr
+    df["intensity"] = df["intensity"].clip(0, 1)
 
-        fatigue = 0
-
-        for i in range(len(df_live)):
-
-            hr = df_live.iloc[i]["heart_rate"]
-
-            if hr == 0:
-                continue
-
-            intensity = hr / max_hr
-            fatigue += intensity * 0.4  # tuned growth
-
-            with placeholder.container():
-                st.subheader("🚴 Live Ride")
-
-                st.metric("Heart Rate", f"{hr} bpm")
-                st.metric("Fatigue Score", round(fatigue, 1))
-
-                # zones
-                if intensity < 0.6:
-                    st.success("🟢 Easy Zone")
-                elif intensity < 0.8:
-                    st.warning("🟡 Moderate Zone")
-                else:
-                    st.error("🔴 High Intensity")
-
-                # fatigue alerts
-                if fatigue > 70:
-                    st.error("⚠️ You’re overcooking it — back off")
-                elif fatigue > 50:
-                    st.warning("⚠️ Fatigue building — be careful")
-
-            time.sleep(0.1)  # speed of simulation
-# ---------------- FILE UPLOAD ----------------
-uploaded_files = st.file_uploader(
-    "Upload ride files", type=["csv", "tcx"], accept_multiple_files=True
-)
-
-# ---------------- TCX PARSER ----------------
-def parse_tcx(file):
-    tree = ET.parse(file)
-    root = tree.getroot()
-
-    ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
-
-    data = []
-    prev_time = None
-    prev_dist = None
-
-    for tp in root.findall('.//ns:Trackpoint', ns):
-
-        time_elem = tp.find('ns:Time', ns)
-        dist_elem = tp.find('ns:DistanceMeters', ns)
-        hr_elem = tp.find('ns:HeartRateBpm/ns:Value', ns)
-
-        if time_elem is None:
-            continue
-
-        curr_time = pd.to_datetime(time_elem.text)
-        curr_dist = float(dist_elem.text) if dist_elem is not None else None
-        hr = int(hr_elem.text) if hr_elem is not None else 0
-
-        speed = 0
-
-        if prev_time is not None and prev_dist is not None and curr_dist is not None:
-            time_diff = (curr_time - prev_time).total_seconds()
-            dist_diff = curr_dist - prev_dist
-
-            if time_diff > 0 and dist_diff >= 0:
-                speed = (dist_diff / time_diff) * 3.6
-                if speed > 80:
-                    speed = 0
-
-        data.append({
-            "time": curr_time,
-            "heart_rate": hr,
-            "speed": speed
-        })
-
-        prev_time = curr_time
-        prev_dist = curr_dist
-
-    df = pd.DataFrame(data)
-
-    if len(df) > 0:
-        df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
+    # Smarter load (non-linear)
+    df["load"] = df["intensity"] ** 2 * 100
 
     return df
 
-# ---------------- LOAD MODEL ----------------
-def compute_load(df, max_hr):
-    avg_hr = df["heart_rate"].mean()
-    duration_hr = len(df) / 3600
+# ---------------- FILE UPLOAD ----------------
+uploaded_files = st.file_uploader(
+    "Upload ride files",
+    type=["csv", "tcx"],
+    accept_multiple_files=True
+)
 
-    if avg_hr == 0 or max_hr == 0:
-        return 0, 0, 0
+history = []
 
-    intensity = avg_hr / max_hr
-    load = (intensity ** 2) * duration_hr * 100
-
-    return load, avg_hr, df["speed"].mean()
-
-# ---------------- MAIN ----------------
 if uploaded_files:
 
-    history = []
-
     for file in uploaded_files:
+        df = load_file(file)
 
-        if file.name.endswith(".tcx"):
-            df = parse_tcx(file)
-        else:
-            df = pd.read_csv(file)
-
-        if len(df) == 0:
+        if df.empty:
             continue
 
-        load, avg_hr, avg_speed = compute_load(df, max_hr)
+        df = compute_load(df)
+
+        avg_load = df["load"].mean()
+        avg_hr = df["heart_rate"].mean()
+
+        # extract date
+        ride_date = df["time"].iloc[0]
 
         history.append({
-            "date": df["time"].iloc[0],
-            "load": load,
-            "avg_hr": avg_hr,
-            "avg_speed": avg_speed
+            "date": ride_date,
+            "load": avg_load,
+            "avg_hr": avg_hr
         })
 
     history = pd.DataFrame(history)
 
-    history["date"] = pd.to_datetime(history["date"])
-    history = history.sort_values("date")
+    # ---------------- DATE FIX ----------------
+    history["date"] = pd.to_datetime(history["date"]).dt.tz_localize(None)
+    history = history.sort_values("date").reset_index(drop=True)
 
     st.subheader(f"📁 {len(history)} ride(s) processed")
     st.dataframe(history)
 
-    # ---------------- TRAINING LOAD ----------------
-    ATL, CTL = 0, 0
-    atl_list, ctl_list, tsb_list = [], [], []
+    # ---------------- TRAINING LOAD MODEL ----------------
+    atl_list = []
+    ctl_list = []
 
-    for i in range(len(history)):
-        load = history.iloc[i]["load"]
+    atl = 0
+    ctl = 0
 
-        if i == 0:
-            days_gap = 1
+    prev_date = None
+
+    for i, row in history.iterrows():
+
+        current_date = row["date"]
+
+        if prev_date is not None:
+            gap = (current_date - prev_date).days
         else:
-            prev = history.iloc[i-1]["date"]
-            curr = history.iloc[i]["date"]
-            days_gap = max((curr - prev).days, 1)
+            gap = 1
 
-        atl_decay = 0.5 ** (days_gap / 7)
-        ctl_decay = 0.5 ** (days_gap / 42)
+        gap = max(gap, 1)
 
-        ATL = ATL * atl_decay + load
-        CTL = CTL * ctl_decay + load
-        TSB = CTL - ATL
+        # decay over gap
+        atl *= np.exp(-gap / 7)
+        ctl *= np.exp(-gap / 42)
 
-        atl_list.append(ATL)
-        ctl_list.append(CTL)
-        tsb_list.append(TSB)
+        # add load
+        atl += row["load"] * (1 - np.exp(-1/7))
+        ctl += row["load"] * (1 - np.exp(-1/42))
+
+        atl_list.append(atl)
+        ctl_list.append(ctl)
+
+        prev_date = current_date
 
     history["ATL"] = atl_list
     history["CTL"] = ctl_list
-    history["TSB"] = tsb_list
+    history["TSB"] = history["CTL"] - history["ATL"]
 
-    current_atl = history["ATL"].iloc[-1]
-    current_ctl = history["CTL"].iloc[-1]
-    current_tsb = history["TSB"].iloc[-1]
-
+    # ---------------- METRICS ----------------
     st.subheader("📊 Training Load")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("ATL (Fatigue)", round(current_atl, 1))
-    c2.metric("CTL (Fitness)", round(current_ctl, 1))
-    c3.metric("TSB (Form)", round(current_tsb, 1))
+    col1, col2, col3 = st.columns(3)
+    col1.metric("ATL (Fatigue)", round(history["ATL"].iloc[-1], 1))
+    col2.metric("CTL (Fitness)", round(history["CTL"].iloc[-1], 1))
+    col3.metric("TSB (Form)", round(history["TSB"].iloc[-1], 1))
 
     st.info("""
-ATL = short-term fatigue  
-CTL = long-term fitness  
-TSB = readiness (positive = fresh, negative = fatigued)
-""")
+    ATL = short-term fatigue  
+    CTL = long-term fitness  
+    TSB = readiness (positive = fresh, negative = fatigued)
+    """)
 
-    # ---------------- DATE AWARENESS ----------------
+    # ---------------- GRAPH ----------------
+    st.subheader("📈 Training Load Trend")
+
+    fig, ax = plt.subplots(figsize=(10,5))
+    ax.plot(history["date"], history["ATL"], label="ATL")
+    ax.plot(history["date"], history["CTL"], label="CTL")
+    ax.plot(history["date"], history["TSB"], label="TSB")
+
+    ax.legend()
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Load")
+
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+    # ---------------- GAP AWARENESS ----------------
+    today = pd.Timestamp.now().tz_localize(None)
     last_date = history["date"].iloc[-1]
-    today = pd.Timestamp.now()
 
-    days_since_last = (today - last_date).days
-    st.write("📅 Days since last ride:", days_since_last)
-
-    ATL_today = current_atl * (0.5 ** (days_since_last / 7))
-    CTL_today = current_ctl * (0.5 ** (days_since_last / 42))
-    TSB_today = CTL_today - ATL_today
+    days_since = (today - last_date).days
+    st.write(f"📅 Days since last ride: {days_since}")
 
     # ---------------- READINESS ----------------
-    st.subheader("🧠 Readiness")
+    tsb_now = history["TSB"].iloc[-1]
 
-    if TSB_today > 10:
-        st.success("Fresh — ready for hard effort")
-    elif TSB_today > -10:
-        st.warning("Moderate — train smart")
+    if days_since > 5:
+        readiness = "Fresh — long break recovered you"
+    elif tsb_now > 10:
+        readiness = "Fresh — ready for hard effort"
+    elif tsb_now > -10:
+        readiness = "Moderate — train smart"
     else:
-        st.error("Fatigued — recovery needed")
+        readiness = "Fatigued — recovery needed"
 
-# ---------------- LIVE RIDE MODE ----------------
+    st.subheader("🧠 Readiness")
+    st.success(readiness)
+
+    # ---------------- TOMORROW PREDICTION ----------------
+    st.subheader("🔮 Tomorrow Prediction")
+
+    scenarios = {
+        "Rest": 0,
+        "Light": 30,
+        "Hard": 60
+    }
+
+    predictions = []
+
+    for name, load in scenarios.items():
+
+        atl_next = history["ATL"].iloc[-1] * np.exp(-1/7) + load
+        ctl_next = history["CTL"].iloc[-1] * np.exp(-1/42) + load
+        tsb_next = ctl_next - atl_next
+
+        predictions.append({
+            "Scenario": name,
+            "ATL": round(atl_next,1),
+            "CTL": round(ctl_next,1),
+            "TSB": round(tsb_next,1)
+        })
+
+    pred_df = pd.DataFrame(predictions)
+    st.dataframe(pred_df)
+
+    # recommendation
+    if tsb_now < -10:
+        st.warning("Rest tomorrow")
+    elif tsb_now > 10:
+        st.success("Push hard tomorrow")
+    else:
+        st.info("Do a light ride tomorrow")
+
+# ---------------- LIVE MODE ----------------
 st.divider()
-st.header("⚡ Live Ride Mode (REAL DATA)")
+st.header("⚡ Live Ride Mode (Simulation)")
 
-if st.button("Start Live Ride"):
+uploaded_live = st.file_uploader(
+    "Upload file for live simulation",
+    type=["csv", "tcx"],
+    key="live"
+)
 
-    fatigue = 0
-    placeholder = st.empty()
+if uploaded_live:
 
-    for _ in range(1000):
+    df_live = load_file(uploaded_live)
 
-        hr = read_live_hr()
+    if not df_live.empty:
 
-        if hr is None:
-            placeholder.warning("Waiting for HR signal...")
-            time.sleep(1)
-            continue
+        if st.button("▶️ Start Simulation"):
 
-        intensity = hr / max_hr
-        fatigue += intensity * 0.5
+            placeholder = st.empty()
+            fatigue = 0
 
-        with placeholder.container():
-            st.write(f"❤️ HR: {hr}")
-            st.write(f"⚡ Fatigue: {round(fatigue,1)}")
+            for i in range(len(df_live)):
 
-            if fatigue > 60:
-                st.error("⚠️ Slow down")
-            elif fatigue > 40:
-                st.warning("Moderate effort")
-            else:
-                st.success("Easy pace")
+                hr = df_live.iloc[i]["heart_rate"]
 
-        time.sleep(1)
+                if hr == 0:
+                    continue
+
+                intensity = hr / max_hr
+                fatigue += intensity * 0.4
+
+                with placeholder.container():
+                    st.subheader("🚴 Live Ride")
+
+                    st.metric("Heart Rate", int(hr))
+                    st.metric("Fatigue", round(fatigue,1))
+
+                    if intensity < 0.6:
+                        st.success("Easy")
+                    elif intensity < 0.8:
+                        st.warning("Moderate")
+                    else:
+                        st.error("Hard")
+
+                    if fatigue > 70:
+                        st.error("⚠️ Slow down")
+
+                time.sleep(0.05)
