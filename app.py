@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
 import time
+import os
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
@@ -16,6 +17,20 @@ resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 60)
 
 max_hr = 220 - age
 st.sidebar.write(f"Estimated Max HR: {max_hr}")
+
+# ---------------- LIVE HR FILE ----------------
+HR_FILE = "hr_live.txt"
+
+def read_live_hr():
+    if os.path.exists(HR_FILE):
+        with open(HR_FILE, "r") as f:
+            lines = f.readlines()
+            if lines:
+                try:
+                    return int(lines[-1].strip())
+                except:
+                    return None
+    return None
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
@@ -73,7 +88,6 @@ def parse_tcx(file):
 
     return df
 
-
 # ---------------- LOAD MODEL ----------------
 def compute_load(df, max_hr):
     avg_hr = df["heart_rate"].mean()
@@ -83,11 +97,9 @@ def compute_load(df, max_hr):
         return 0, 0, 0
 
     intensity = avg_hr / max_hr
-
     load = (intensity ** 2) * duration_hr * 100
 
     return load, avg_hr, df["speed"].mean()
-
 
 # ---------------- MAIN ----------------
 if uploaded_files:
@@ -115,7 +127,6 @@ if uploaded_files:
 
     history = pd.DataFrame(history)
 
-    # 🔥 critical fix
     history["date"] = pd.to_datetime(history["date"])
     history = history.sort_values("date")
 
@@ -124,7 +135,6 @@ if uploaded_files:
 
     # ---------------- TRAINING LOAD ----------------
     ATL, CTL = 0, 0
-
     atl_list, ctl_list, tsb_list = [], [], []
 
     for i in range(len(history)):
@@ -169,35 +179,13 @@ CTL = long-term fitness
 TSB = readiness (positive = fresh, negative = fatigued)
 """)
 
-    # ---------------- GRAPH ----------------
-    st.subheader("📈 Training Load Trend")
-
-    fig, ax = plt.subplots()
-
-    ax.plot(history["date"], history["ATL"], label="ATL")
-    ax.plot(history["date"], history["CTL"], label="CTL")
-    ax.plot(history["date"], history["TSB"], label="TSB")
-
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Load")
-    ax.legend()
-    plt.xticks(rotation=30)
-
-    st.pyplot(fig)
-
     # ---------------- DATE AWARENESS ----------------
     last_date = history["date"].iloc[-1]
-
-    if last_date.tzinfo is not None:
-        today = pd.Timestamp.now(tz=last_date.tzinfo)
-    else:
-        today = pd.Timestamp.now()
+    today = pd.Timestamp.now()
 
     days_since_last = (today - last_date).days
-
     st.write("📅 Days since last ride:", days_since_last)
 
-    # decay to today
     ATL_today = current_atl * (0.5 ** (days_since_last / 7))
     CTL_today = current_ctl * (0.5 ** (days_since_last / 42))
     TSB_today = CTL_today - ATL_today
@@ -212,67 +200,36 @@ TSB = readiness (positive = fresh, negative = fatigued)
     else:
         st.error("Fatigued — recovery needed")
 
-    # ---------------- PREDICTION ----------------
-    st.subheader("🔮 Tomorrow Prediction")
-
-    scenarios = {
-        "Rest": 0,
-        "Light": 30,
-        "Hard": 60
-    }
-
-    pred = []
-
-    for name, load in scenarios.items():
-        new_atl = ATL_today * 0.5 + load
-        new_ctl = CTL_today * 0.9 + load
-        new_tsb = new_ctl - new_atl
-
-        pred.append({
-            "Scenario": name,
-            "ATL": round(new_atl, 1),
-            "CTL": round(new_ctl, 1),
-            "TSB": round(new_tsb, 1)
-        })
-
-    st.dataframe(pd.DataFrame(pred))
-
-    # ---------------- RECOMMENDATION ----------------
-    st.subheader("🧠 Recommendation")
-
-    if TSB_today < -15:
-        st.warning("Rest tomorrow")
-    elif TSB_today < 5:
-        st.info("Light ride recommended")
-    else:
-        st.success("You can push hard tomorrow")
-
 # ---------------- LIVE RIDE MODE ----------------
 st.divider()
-st.header("⚡ Live Ride Mode (Simulation)")
+st.header("⚡ Live Ride Mode (REAL DATA)")
 
-start = st.button("Start Ride")
-
-if start:
-    placeholder = st.empty()
+if st.button("Start Live Ride"):
 
     fatigue = 0
+    placeholder = st.empty()
 
-    for i in range(50):
-        simulated_hr = 120 + (i % 30)
+    for _ in range(1000):
 
-        intensity = simulated_hr / max_hr
+        hr = read_live_hr()
+
+        if hr is None:
+            placeholder.warning("Waiting for HR signal...")
+            time.sleep(1)
+            continue
+
+        intensity = hr / max_hr
         fatigue += intensity * 0.5
 
         with placeholder.container():
-            st.write(f"HR: {simulated_hr}")
-            st.write(f"Fatigue Score: {round(fatigue,1)}")
+            st.write(f"❤️ HR: {hr}")
+            st.write(f"⚡ Fatigue: {round(fatigue,1)}")
 
             if fatigue > 60:
-                st.error("⚠️ High fatigue — slow down")
+                st.error("⚠️ Slow down")
             elif fatigue > 40:
                 st.warning("Moderate effort")
             else:
                 st.success("Easy pace")
 
-        time.sleep(0.2)
+        time.sleep(1)
