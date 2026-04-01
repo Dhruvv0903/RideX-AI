@@ -2,17 +2,15 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
-from datetime import datetime
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
-
 st.title("🚴 RideX AI — Performance Engine")
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
     "Upload ride files",
-    type=["csv", "tcx"],
+    type=["tcx"],
     accept_multiple_files=True
 )
 
@@ -23,15 +21,9 @@ def parse_tcx(file):
 
     ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
-    data = []
-
-    times = []
-    distances = []
-    heart_rates = []
-    cadences = []
+    times, distances, heart_rates, cadences = [], [], [], []
 
     for tp in root.findall('.//ns:Trackpoint', ns):
-
         time_elem = tp.find('ns:Time', ns)
         dist_elem = tp.find('ns:DistanceMeters', ns)
         hr_elem = tp.find('.//ns:HeartRateBpm/ns:Value', ns)
@@ -53,16 +45,14 @@ def parse_tcx(file):
 
     df = df.dropna(subset=["time"])
 
-    # SPEED CALC
-    df["speed"] = 0
-    for i in range(1, len(df)):
-        dt = (df.loc[i, "time"] - df.loc[i-1, "time"]).total_seconds()
-        dd = df.loc[i, "distance"] - df.loc[i-1, "distance"] if df.loc[i, "distance"] and df.loc[i-1, "distance"] else 0
+    # ---------------- SPEED (FIXED + VECTORIZED) ----------------
+    df["time_diff"] = df["time"].diff().dt.total_seconds()
+    df["dist_diff"] = df["distance"].diff()
 
-        if dt > 0:
-            speed = (dd / dt) * 3.6
-            if 0 <= speed <= 80:
-                df.loc[i, "speed"] = speed
+    df["speed"] = (df["dist_diff"] / df["time_diff"]) * 3.6
+
+    df["speed"] = df["speed"].clip(lower=0, upper=80)
+    df["speed"] = df["speed"].fillna(0)
 
     df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
 
@@ -88,14 +78,11 @@ def calculate_fatigue(hr, cadence, duration_min):
 # ---------------- MAIN ----------------
 if uploaded_files:
 
-    ride_summaries = []
+    rides = []
 
     for file in uploaded_files:
 
-        if file.name.endswith(".tcx"):
-            df = parse_tcx(file)
-        else:
-            continue
+        df = parse_tcx(file)
 
         if df.empty:
             continue
@@ -110,29 +97,25 @@ if uploaded_files:
 
         fatigue = calculate_fatigue(avg_hr, avg_cad, duration_min)
 
-        # SESSION LOAD (key fix)
-        session_load = fatigue * duration_min / 60
+        # 🔥 KEY: SESSION LOAD
+        load = fatigue * duration_min / 60
 
-        ride_summaries.append({
+        rides.append({
             "date": df["time"].iloc[0],
             "fatigue": fatigue,
-            "load": session_load,
+            "load": load,
             "avg_hr": avg_hr,
             "avg_speed": avg_speed
         })
 
-    history = pd.DataFrame(ride_summaries).sort_values("date")
+    history = pd.DataFrame(rides).sort_values("date")
 
     st.subheader(f"📂 {len(history)} ride(s) processed")
     st.dataframe(history)
 
     # ---------------- TRAINING LOAD MODEL ----------------
-    ATL = []
-    CTL = []
-
-    atl = 0
-    ctl = 0
-
+    ATL, CTL = [], []
+    atl, ctl = 0, 0
     last_date = None
 
     for _, row in history.iterrows():
@@ -141,9 +124,10 @@ if uploaded_files:
             days = 1
         else:
             days = (row["date"] - last_date).days
-            if days == 0:
+            if days <= 0:
                 days = 1
 
+        # Exponential decay
         decay_atl = pow(0.5, days / 7)
         decay_ctl = pow(0.5, days / 42)
 
@@ -159,7 +143,7 @@ if uploaded_files:
     history["CTL"] = CTL
     history["TSB"] = history["CTL"] - history["ATL"]
 
-    # ---------------- UI ----------------
+    # ---------------- METRICS ----------------
     st.subheader("📊 Training Load")
 
     col1, col2, col3 = st.columns(3)
