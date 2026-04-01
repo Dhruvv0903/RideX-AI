@@ -45,21 +45,18 @@ def parse_tcx(file):
 
     df = df.dropna(subset=["time"])
 
-    # ---------------- SPEED (FIXED + VECTORIZED) ----------------
+    # SPEED (vectorized)
     df["time_diff"] = df["time"].diff().dt.total_seconds()
     df["dist_diff"] = df["distance"].diff()
 
     df["speed"] = (df["dist_diff"] / df["time_diff"]) * 3.6
-
-    df["speed"] = df["speed"].clip(lower=0, upper=80)
-    df["speed"] = df["speed"].fillna(0)
-
+    df["speed"] = df["speed"].clip(lower=0, upper=80).fillna(0)
     df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
 
     return df
 
 
-# ---------------- FATIGUE MODEL ----------------
+# ---------------- FATIGUE ----------------
 def calculate_fatigue(hr, cadence, duration_min):
     hr_factor = min(hr / 195, 1)
     duration_factor = min(duration_min / 120, 1)
@@ -87,7 +84,6 @@ if uploaded_files:
         if df.empty:
             continue
 
-        # Duration
         duration_sec = (df["time"].iloc[-1] - df["time"].iloc[0]).total_seconds()
         duration_min = duration_sec / 60
 
@@ -97,7 +93,6 @@ if uploaded_files:
 
         fatigue = calculate_fatigue(avg_hr, avg_cad, duration_min)
 
-        # 🔥 KEY: SESSION LOAD
         load = fatigue * duration_min / 60
 
         rides.append({
@@ -108,26 +103,27 @@ if uploaded_files:
             "avg_speed": avg_speed
         })
 
-    history = pd.DataFrame(rides).sort_values("date")
+    history = pd.DataFrame(rides)
+
+    # 🚨 SAFETY CHECK
+    if history.empty:
+        st.warning("No valid ride data found.")
+        st.stop()
+
+    history = history.sort_values("date")
 
     st.subheader(f"📂 {len(history)} ride(s) processed")
     st.dataframe(history)
 
-    # ---------------- TRAINING LOAD MODEL ----------------
+    # ---------------- TRAINING LOAD ----------------
     ATL, CTL = [], []
     atl, ctl = 0, 0
     last_date = None
 
     for _, row in history.iterrows():
 
-        if last_date is None:
-            days = 1
-        else:
-            days = (row["date"] - last_date).days
-            if days <= 0:
-                days = 1
+        days = 1 if last_date is None else max((row["date"] - last_date).days, 1)
 
-        # Exponential decay
         decay_atl = pow(0.5, days / 7)
         decay_ctl = pow(0.5, days / 42)
 
@@ -147,98 +143,53 @@ if uploaded_files:
     st.subheader("📊 Training Load")
 
     col1, col2, col3 = st.columns(3)
-
-    col1.metric("Fatigue (ATL — Acute Training Load)", round(history["ATL"].iloc[-1], 1))
-    col2.metric("Fitness (CTL — Chronic Training Load)", round(history["CTL"].iloc[-1], 1))
-    col3.metric("Form (TSB — Training Stress Balance)", round(history["TSB"].iloc[-1], 1))
+    col1.metric("Fatigue (ATL)", round(history["ATL"].iloc[-1], 1))
+    col2.metric("Fitness (CTL)", round(history["CTL"].iloc[-1], 1))
+    col3.metric("Form (TSB)", round(history["TSB"].iloc[-1], 1))
 
     # ---------------- GRAPH ----------------
     st.subheader("📈 Training Load Trend")
 
     fig, ax = plt.subplots()
-
-    ax.plot(history["date"], history["ATL"], label="Fatigue (ATL)")
-    ax.plot(history["date"], history["CTL"], label="Fitness (CTL)")
-    ax.plot(history["date"], history["TSB"], label="Form (TSB)")
-
+    ax.plot(history["date"], history["ATL"], label="ATL")
+    ax.plot(history["date"], history["CTL"], label="CTL")
+    ax.plot(history["date"], history["TSB"], label="TSB")
     ax.legend()
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Load")
-
     st.pyplot(fig)
 
-    # ---------------- READINESS ----------------
-    st.subheader("🧠 Readiness")
+    # ---------------- PREDICTION (SAFE) ----------------
+    st.subheader("🔮 Tomorrow Prediction")
 
-    tsb = history["TSB"].iloc[-1]
+    if "ATL" in history.columns and len(history) > 0:
 
-    if tsb > 10:
-        st.success("Fresh — ready for hard effort")
-    elif tsb > -10:
-        st.warning("Neutral — train normally")
+        current_atl = history["ATL"].iloc[-1]
+        current_ctl = history["CTL"].iloc[-1]
+
+        decay_atl = pow(0.5, 1 / 7)
+        decay_ctl = pow(0.5, 1 / 42)
+
+        scenarios = {
+            "Rest Day": 0,
+            "Light Ride": 30,
+            "Hard Ride": 70
+        }
+
+        predictions = []
+
+        for name, load in scenarios.items():
+            next_atl = current_atl * decay_atl + load
+            next_ctl = current_ctl * decay_ctl + load
+            next_tsb = next_ctl - next_atl
+
+            predictions.append({
+                "Scenario": name,
+                "Predicted ATL": round(next_atl, 1),
+                "Predicted CTL": round(next_ctl, 1),
+                "Predicted TSB": round(next_tsb, 1)
+            })
+
+        pred_df = pd.DataFrame(predictions)
+        st.dataframe(pred_df)
+
     else:
-        st.error("Fatigued — recovery needed")
-
-
-# ---------------- PREDICTION LAYER ----------------
-st.subheader("🔮 Tomorrow Prediction")
-
-current_atl = history["ATL"].iloc[-1]
-current_ctl = history["CTL"].iloc[-1]
-
-# Assume 1 day gap
-decay_atl = pow(0.5, 1 / 7)
-decay_ctl = pow(0.5, 1 / 42)
-
-# Scenarios
-scenarios = {
-    "Rest Day": 0,
-    "Light Ride": 30,
-    "Hard Ride": 70
-}
-
-predictions = []
-
-for name, load in scenarios.items():
-
-    next_atl = current_atl * decay_atl + load
-    next_ctl = current_ctl * decay_ctl + load
-
-    next_tsb = next_ctl - next_atl
-
-    predictions.append({
-        "Scenario": name,
-        "Predicted Fatigue (ATL)": round(next_atl, 1),
-        "Predicted Fitness (CTL)": round(next_ctl, 1),
-        "Predicted Form (TSB)": round(next_tsb, 1)
-    })
-
-pred_df = pd.DataFrame(predictions)
-
-st.dataframe(pred_df)
-
-# ---------------- DECISION ENGINE ----------------
-st.subheader("🧠 Recommendation")
-
-best_option = max(predictions, key=lambda x: x["Predicted Form (TSB)"])
-
-if best_option["Scenario"] == "Rest Day":
-    st.warning("You should rest tomorrow to recover properly.")
-
-elif best_option["Scenario"] == "Light Ride":
-    st.info("A light ride tomorrow will keep you balanced.")
-
-else:
-    st.success("You're fit enough to push a hard session tomorrow.")
-
-    # ---------------- CURRENT RIDE ----------------
-    st.subheader("📍 Latest Ride")
-
-    latest = history.iloc[-1]
-
-    st.write(f"Fatigue Score: {round(latest['fatigue'],1)}")
-
-    if latest["avg_speed"] > 0:
-        st.write(f"Avg Speed: {round(latest['avg_speed'],1)} km/h")
-    else:
-        st.write("Avg Speed: Not available")
+        st.info("Upload ride data to enable predictions.")
