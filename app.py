@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
+import os
 from fatigue_model import calculate_fatigue
 
 # ---------------- CONFIG ----------------
@@ -45,6 +46,7 @@ except FileNotFoundError:
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_file = st.file_uploader("Upload ride file", type=["csv", "tcx"])
+
 
 # ---------------- TCX PARSER ----------------
 def parse_tcx(file):
@@ -92,11 +94,11 @@ def parse_tcx(file):
 
     df = pd.DataFrame(data)
 
-    # smooth speed
     if 'speed' in df.columns:
         df['speed'] = df['speed'].rolling(5, min_periods=1).mean()
 
     return df
+
 
 # ---------------- NORMALIZATION ----------------
 def normalize_data(df):
@@ -122,6 +124,7 @@ def normalize_data(df):
 
     return df
 
+
 # ---------------- HELPERS ----------------
 def fatigue_zone(score):
     if score < 40:
@@ -130,6 +133,7 @@ def fatigue_zone(score):
         return "🟡 Moderate Fatigue"
     else:
         return "🔴 High Fatigue"
+
 
 def generate_insights(df):
     insights = []
@@ -162,6 +166,7 @@ def generate_insights(df):
         insights.append("👍 Balanced ride — no major fatigue drivers detected.")
 
     return insights
+
 
 # ---------------- MAIN ----------------
 if uploaded_file:
@@ -203,6 +208,26 @@ if uploaded_file:
 
         latest = df['fatigue_score'].iloc[-1]
 
+        # ---------------- SAVE HISTORY ----------------
+        history_file = "ride_history.csv"
+
+        new_entry = {
+            "avg_fatigue": df['fatigue_score'].mean(),
+            "max_fatigue": df['fatigue_score'].max(),
+            "avg_hr": df['heart_rate'].mean(),
+            "avg_speed": df['speed'].mean()
+        }
+
+        new_df = pd.DataFrame([new_entry])
+
+        if os.path.exists(history_file):
+            old_df = pd.read_csv(history_file)
+            updated_df = pd.concat([old_df, new_df], ignore_index=True)
+        else:
+            updated_df = new_df
+
+        updated_df.to_csv(history_file, index=False)
+
         # ---------------- OUTPUT ----------------
         st.subheader("📍 Current State")
         st.write(f"Fatigue Level: {fatigue_zone(latest)}")
@@ -226,6 +251,30 @@ if uploaded_file:
 
         if original_speed_missing:
             st.info("Speed data was not present in the file — calculated using distance/time.")
+
+        # ---------------- PROGRESS ----------------
+        st.subheader("📊 Your Progress")
+
+        history = pd.read_csv(history_file)
+
+        if len(history) > 1:
+            prev = history.iloc[-2]
+
+            if new_entry["avg_fatigue"] < prev["avg_fatigue"]:
+                st.write("✅ You handled this ride better than your last one.")
+            else:
+                st.write("⚠️ This ride was more fatiguing than your previous one.")
+
+            if new_entry["avg_hr"] < prev["avg_hr"]:
+                st.write("❤️ Lower heart rate — improved efficiency.")
+            else:
+                st.write("📈 Higher heart rate — increased effort.")
+
+        # ---------------- BASELINE ----------------
+        st.subheader("🧬 Your Baseline")
+
+        st.write(f"Typical Fatigue: {round(history['avg_fatigue'].mean(),1)}")
+        st.write(f"Typical Heart Rate: {round(history['avg_hr'].mean(),1)}")
 
         # ---------------- RIDE TYPE ----------------
         st.subheader("⚡ Ride Type")
@@ -253,14 +302,11 @@ if uploaded_file:
         st.subheader("🛠 What You Should Do Next")
 
         if latest < 40:
-            st.write("• You can do another moderate ride tomorrow")
-            st.write("• Consider increasing intensity slightly next session")
+            st.write("• You can train again tomorrow")
         elif latest < 65:
-            st.write("• Go for a light recovery ride or rest")
-            st.write("• Avoid high intensity training tomorrow")
+            st.write("• Light recovery or rest recommended")
         else:
             st.write("• Take a full rest day")
-            st.write("• Focus on hydration and recovery")
 
         # ---------------- INSIGHTS ----------------
         st.subheader("🧠 Insights")
