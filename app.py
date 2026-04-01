@@ -49,9 +49,8 @@ def parse_tcx(file):
 
     return df
 
-
 # ==============================
-# IMPROVED FATIGUE MODEL
+# FIXED FATIGUE MODEL (REALISTIC)
 # ==============================
 def compute_fatigue(df):
     fatigue = 0
@@ -63,8 +62,9 @@ def compute_fatigue(df):
 
         intensity = max(0, (hr - resting_hr) / (max_hr - resting_hr))
 
-        fatigue += intensity * delta * 0.2   # 🔥 boosted
-        fatigue -= 0.02 * delta              # recovery
+        # 🔥 FIXED SCALING
+        fatigue += intensity * delta * 0.03
+        fatigue -= 0.015 * delta
 
         fatigue = max(0, min(100, fatigue))
 
@@ -72,7 +72,6 @@ def compute_fatigue(df):
 
     df["fatigue"] = fatigue_list
     return df
-
 
 # ==============================
 # MAIN
@@ -120,7 +119,6 @@ if history:
     c2.metric("CTL", f"{CTL:.1f}")
     c3.metric("TSB", f"{TSB:.1f}")
 
-    # GRAPH
     fig, ax = plt.subplots()
     ax.plot(history_df["date"], history_df["ATL"], label="ATL")
     ax.plot(history_df["date"], history_df["CTL"], label="CTL")
@@ -129,21 +127,18 @@ if history:
     plt.xticks(rotation=45)
     st.pyplot(fig)
 
-    # FIXED DATE
-    last_date = pd.to_datetime(history_df["date"].iloc[-1])
-    last_date = last_date.tz_localize(None) if last_date.tzinfo else last_date
+    last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
     today = pd.Timestamp.now().tz_localize(None)
 
     days_since = (today - last_date).days
     st.write(f"📅 Days since last ride: {days_since}")
 
-    # READINESS
     if days_since > 7:
         readiness = "Fresh — long break recovered you"
     elif TSB > 10:
-        readiness = "Fresh — ready for hard effort"
+        readiness = "Fresh — push hard"
     elif TSB < -10:
-        readiness = "Fatigued — recovery needed"
+        readiness = "Fatigued — recover"
     else:
         readiness = "Moderate — train smart"
 
@@ -151,7 +146,7 @@ if history:
     st.success(readiness)
 
 # ==============================
-# LIVE MODE — OPTIMIZED + SMOOTH
+# LIVE MODE (BALANCED ENGINE)
 # ==============================
 st.subheader("⚡ Live Ride Mode — Smart Pacing")
 
@@ -166,58 +161,46 @@ if live_file:
         if st.button("▶ Start Simulation"):
 
             placeholder = st.empty()
+            smoothed_hr = None
 
-            smoothed_hr = None  # EMA smoothing
-
-            for i in range(0, len(df_live), 5):   # 🔥 skip frames
+            for i in range(0, len(df_live), 5):
                 row = df_live.iloc[i]
 
                 hr = row["hr"]
                 fatigue = row["fatigue"]
 
-                # ==============================
-                # EMA SMOOTHING (REAL FEEL)
-                # ==============================
+                # EMA smoothing
                 if smoothed_hr is None:
                     smoothed_hr = hr
                 else:
-                    smoothed_hr = 0.8 * smoothed_hr + 0.2 * hr
+                    smoothed_hr = 0.85 * smoothed_hr + 0.15 * hr
 
-                # ==============================
-                # ZONES
-                # ==============================
-                zone1 = optimal_low * 0.9
-                zone2 = optimal_low
-                zone3 = optimal_high
-                zone4 = optimal_high * 1.1
-
-                # ==============================
-                # SMART DECISION ENGINE
-                # ==============================
-                if fatigue > 90:
-                    decision = "🛑 STOP — exhaustion imminent"
-
-                elif fatigue > 75:
-                    decision = "⚠️ High fatigue — reduce effort"
-
-                elif smoothed_hr < zone1:
+                # ==========================
+                # HR-DRIVEN DECISION (PRIMARY)
+                # ==========================
+                if smoothed_hr < optimal_low:
                     decision = "🔥 Push more"
 
-                elif zone1 <= smoothed_hr < zone2:
-                    decision = "🚴 Build effort"
-
-                elif zone2 <= smoothed_hr <= zone3:
+                elif optimal_low <= smoothed_hr <= optimal_high:
                     decision = "✅ Perfect pacing"
 
-                elif zone3 < smoothed_hr <= zone4:
+                elif optimal_high < smoothed_hr <= optimal_high + 10:
                     decision = "⚖️ Strong effort"
 
                 else:
-                    decision = "🚨 Too intense — back off"
+                    decision = "🚨 Too intense"
 
-                # ==============================
+                # ==========================
+                # FATIGUE OVERRIDE (LIMITER)
+                # ==========================
+                if fatigue > 85:
+                    decision = "🛑 STOP — exhaustion imminent"
+                elif fatigue > 70:
+                    decision = "⚠️ High fatigue — reduce effort"
+
+                # ==========================
                 # UI
-                # ==============================
+                # ==========================
                 with placeholder.container():
                     st.metric("Heart Rate", f"{int(smoothed_hr)} bpm")
                     st.metric("Fatigue", f"{int(fatigue)} / 100")
@@ -226,4 +209,4 @@ if live_file:
 
                     st.success(decision)
 
-                time.sleep(0.05)   # 🔥 fast + smooth
+                time.sleep(0.08)
