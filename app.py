@@ -25,7 +25,15 @@ try:
 except:
     st.warning("Sample file not found")
 
-uploaded_file = st.file_uploader("Upload ride file", type=["csv", "tcx"])
+# ---------------- UPLOADER ----------------
+uploaded_files = st.file_uploader(
+    "Upload ride files",
+    type=["csv", "tcx"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    st.write(f"📂 {len(uploaded_files)} file(s) uploaded")
 
 # ---------------- TCX PARSER ----------------
 def parse_tcx(file):
@@ -61,19 +69,26 @@ def parse_tcx(file):
         prev_time, prev_dist = curr_time, curr_dist
 
     df = pd.DataFrame(data)
-    df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
+
+    if "speed" in df.columns:
+        df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
+
     return df
 
 # ---------------- MAIN ----------------
 if uploaded_files:
 
+    history_file = "ride_history.csv"
+
     for uploaded_file in uploaded_files:
 
+        # -------- LOAD --------
         if uploaded_file.name.endswith(".tcx"):
             df = parse_tcx(uploaded_file)
         else:
             df = pd.read_csv(uploaded_file)
 
+        # -------- BASIC PROCESS --------
         df["duration_min"] = df.index / 60
 
         df["fatigue_score"] = df.apply(
@@ -83,17 +98,18 @@ if uploaded_files:
                 0,
                 row["duration_min"],
                 0
-            ), axis=1
+            ),
+            axis=1
         )
 
-        # ---------------- SAVE HISTORY ----------------
-        history_file = "ride_history.csv"
+        # -------- SAVE HISTORY --------
+        avg_speed = df["speed"].mean() if "speed" in df.columns else None
 
         new_entry = {
             "date": datetime.now(),
             "avg_fatigue": df["fatigue_score"].mean(),
             "avg_hr": df["heart_rate"].mean(),
-            "avg_speed": df["speed"].mean() if "speed" in df.columns else 0
+            "avg_speed": avg_speed if avg_speed is not None else None
         }
 
         new_df = pd.DataFrame([new_entry])
@@ -106,24 +122,21 @@ if uploaded_files:
 
         hist.to_csv(history_file, index=False)
 
-    # Load updated history ONCE after all uploads
-    hist = pd.read_csv("ride_history.csv")
+    # -------- LOAD UPDATED HISTORY --------
+    hist = pd.read_csv(history_file)
 
-    # ---------------- DEBUG (REMOVE LATER) ----------------
+    # DEBUG (remove later)
     st.write("History length:", len(hist))
     st.dataframe(hist.tail())
 
     # ---------------- TRAINING LOAD ----------------
-    st.subheader("📊 Training Load (Advanced)")
+    st.subheader("📊 Training Load")
 
     hist["date"] = pd.to_datetime(hist["date"])
     hist = hist.sort_values("date")
 
-    atl = []
-    ctl = []
-
-    atl_value = 0
-    ctl_value = 0
+    atl, ctl = [], []
+    atl_value, ctl_value = 0, 0
 
     for _, row in hist.iterrows():
         load = row["avg_fatigue"]
@@ -140,27 +153,22 @@ if uploaded_files:
 
     latest_row = hist.iloc[-1]
 
-    acute = latest_row["ATL"]
-    chronic = latest_row["CTL"]
-    balance = latest_row["TSB"]
-
     col1, col2, col3 = st.columns(3)
-
-    col1.metric("Fatigue (ATL)", round(acute,1))
-    col2.metric("Fitness (CTL)", round(chronic,1))
-    col3.metric("Form (TSB)", round(balance,1))
+    col1.metric("Fatigue (ATL)", round(latest_row["ATL"], 1))
+    col2.metric("Fitness (CTL)", round(latest_row["CTL"], 1))
+    col3.metric("Form (TSB)", round(latest_row["TSB"], 1))
 
     # ---------------- READINESS ----------------
     st.subheader("🧠 Readiness")
 
-    if balance > 10:
+    if latest_row["TSB"] > 10:
         st.success("Fresh — ready for high intensity")
-    elif balance > -5:
+    elif latest_row["TSB"] > -5:
         st.info("Balanced — maintain training")
     else:
         st.warning("Fatigued — recovery needed")
 
-    # ---------------- GRAPH FIX ----------------
+    # ---------------- GRAPH ----------------
     st.subheader("📈 Training Load Trend")
 
     if len(hist) > 1:
@@ -173,8 +181,18 @@ if uploaded_files:
         ax.legend()
         st.pyplot(fig)
     else:
-        st.info("Upload more rides to see training trends.")
+        st.info("Upload more rides to see trends.")
 
-    # ---------------- CURRENT ----------------
+    # ---------------- CURRENT RIDE ----------------
     st.subheader("📍 Current Ride")
-    st.write(f"Fatigue Score: {round(latest,1)}")
+
+    latest_fatigue = df["fatigue_score"].iloc[-1]
+    st.write(f"Fatigue Score: {round(latest_fatigue,1)}")
+
+    # ---------------- SPEED DISPLAY FIX ----------------
+    st.subheader("🚴 Speed")
+
+    if "speed" in df.columns and df["speed"].sum() > 0:
+        st.metric("Avg Speed", round(df["speed"].mean(), 1))
+    else:
+        st.write("Avg Speed: Not available")
