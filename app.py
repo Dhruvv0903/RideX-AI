@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
+import matplotlib.dates as mdates
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
@@ -56,7 +57,7 @@ def parse_tcx(file):
     return df
 
 
-# ---------------- FATIGUE ----------------
+# ---------------- FATIGUE MODEL ----------------
 def calculate_fatigue(hr, cadence, duration_min):
     hr_factor = min(hr / 195, 1)
     duration_factor = min(duration_min / 120, 1)
@@ -78,7 +79,6 @@ if uploaded_files:
     rides = []
 
     for file in uploaded_files:
-
         df = parse_tcx(file)
 
         if df.empty:
@@ -92,7 +92,6 @@ if uploaded_files:
         avg_speed = df["speed"].mean()
 
         fatigue = calculate_fatigue(avg_hr, avg_cad, duration_min)
-
         load = fatigue * duration_min / 60
 
         rides.append({
@@ -105,7 +104,6 @@ if uploaded_files:
 
     history = pd.DataFrame(rides)
 
-    # 🚨 SAFETY CHECK
     if history.empty:
         st.warning("No valid ride data found.")
         st.stop()
@@ -121,7 +119,6 @@ if uploaded_files:
     last_date = None
 
     for _, row in history.iterrows():
-
         days = 1 if last_date is None else max((row["date"] - last_date).days, 1)
 
         decay_atl = pow(0.5, days / 7)
@@ -143,53 +140,97 @@ if uploaded_files:
     st.subheader("📊 Training Load")
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Fatigue (ATL)", round(history["ATL"].iloc[-1], 1))
-    col2.metric("Fitness (CTL)", round(history["CTL"].iloc[-1], 1))
-    col3.metric("Form (TSB)", round(history["TSB"].iloc[-1], 1))
 
-    # ---------------- GRAPH ----------------
+    col1.metric("Fatigue (ATL — Acute Training Load)", round(history["ATL"].iloc[-1], 1))
+    col2.metric("Fitness (CTL — Chronic Training Load)", round(history["CTL"].iloc[-1], 1))
+    col3.metric("Form (TSB — Training Stress Balance)", round(history["TSB"].iloc[-1], 1))
+
+    # ---------------- EXPLANATION ----------------
+    st.info("""
+**What do these mean?**
+
+- **ATL (Acute Training Load):** Short-term fatigue — how tired you are right now  
+- **CTL (Chronic Training Load):** Long-term fitness — how trained you are  
+- **TSB (Training Stress Balance):** Readiness — whether you're fresh or fatigued  
+
+👉 High ATL + Low TSB = fatigue  
+👉 Balanced ATL/CTL = optimal training  
+""")
+
+    # ---------------- GRAPH (FIXED DATES) ----------------
     st.subheader("📈 Training Load Trend")
 
     fig, ax = plt.subplots()
+
     ax.plot(history["date"], history["ATL"], label="ATL")
     ax.plot(history["date"], history["CTL"], label="CTL")
     ax.plot(history["date"], history["TSB"], label="TSB")
+
     ax.legend()
+
+    # FIXED DATE DISPLAY
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+
+    plt.xticks(rotation=30)
+
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Load")
+
     st.pyplot(fig)
 
-    # ---------------- PREDICTION (SAFE) ----------------
+    # ---------------- READINESS ----------------
+    st.subheader("🧠 Readiness")
+
+    tsb = history["TSB"].iloc[-1]
+
+    if tsb > 10:
+        st.success("Fresh — ready for hard effort")
+    elif tsb > -10:
+        st.warning("Neutral — train normally")
+    else:
+        st.error("Fatigued — recovery needed")
+
+    # ---------------- PREDICTION ----------------
     st.subheader("🔮 Tomorrow Prediction")
 
-    if "ATL" in history.columns and len(history) > 0:
+    current_atl = history["ATL"].iloc[-1]
+    current_ctl = history["CTL"].iloc[-1]
 
-        current_atl = history["ATL"].iloc[-1]
-        current_ctl = history["CTL"].iloc[-1]
+    decay_atl = pow(0.5, 1 / 7)
+    decay_ctl = pow(0.5, 1 / 42)
 
-        decay_atl = pow(0.5, 1 / 7)
-        decay_ctl = pow(0.5, 1 / 42)
+    scenarios = {
+        "Rest Day": 0,
+        "Light Ride": 30,
+        "Hard Ride": 70
+    }
 
-        scenarios = {
-            "Rest Day": 0,
-            "Light Ride": 30,
-            "Hard Ride": 70
-        }
+    predictions = []
 
-        predictions = []
+    for name, load in scenarios.items():
+        next_atl = current_atl * decay_atl + load
+        next_ctl = current_ctl * decay_ctl + load
+        next_tsb = next_ctl - next_atl
 
-        for name, load in scenarios.items():
-            next_atl = current_atl * decay_atl + load
-            next_ctl = current_ctl * decay_ctl + load
-            next_tsb = next_ctl - next_atl
+        predictions.append({
+            "Scenario": name,
+            "ATL": round(next_atl, 1),
+            "CTL": round(next_ctl, 1),
+            "TSB": round(next_tsb, 1)
+        })
 
-            predictions.append({
-                "Scenario": name,
-                "Predicted ATL": round(next_atl, 1),
-                "Predicted CTL": round(next_ctl, 1),
-                "Predicted TSB": round(next_tsb, 1)
-            })
+    pred_df = pd.DataFrame(predictions)
+    st.dataframe(pred_df)
 
-        pred_df = pd.DataFrame(predictions)
-        st.dataframe(pred_df)
+    # ---------------- DECISION ----------------
+    st.subheader("🧠 Recommendation")
 
+    best = max(predictions, key=lambda x: x["TSB"])
+
+    if best["Scenario"] == "Rest Day":
+        st.warning("You should rest tomorrow.")
+    elif best["Scenario"] == "Light Ride":
+        st.info("A light ride is optimal tomorrow.")
     else:
-        st.info("Upload ride data to enable predictions.")
+        st.success("You’re ready for a hard ride.")
