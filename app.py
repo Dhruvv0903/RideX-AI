@@ -65,48 +65,49 @@ def parse_tcx(file):
     return df
 
 # ---------------- MAIN ----------------
-if uploaded_file:
+if uploaded_files:
 
-    # Load data
-    if uploaded_file.name.endswith(".tcx"):
-        df = parse_tcx(uploaded_file)
-    else:
-        df = pd.read_csv(uploaded_file)
+    for uploaded_file in uploaded_files:
 
-    # Basic processing
-    df["duration_min"] = df.index / 60
+        if uploaded_file.name.endswith(".tcx"):
+            df = parse_tcx(uploaded_file)
+        else:
+            df = pd.read_csv(uploaded_file)
 
-    df["fatigue_score"] = df.apply(
-        lambda row: calculate_fatigue(
-            row.get("heart_rate", 0),
-            0,
-            0,
-            row["duration_min"],
-            0
-        ), axis=1
-    )
+        df["duration_min"] = df.index / 60
 
-    latest = df["fatigue_score"].iloc[-1]
+        df["fatigue_score"] = df.apply(
+            lambda row: calculate_fatigue(
+                row.get("heart_rate", 0),
+                0,
+                0,
+                row["duration_min"],
+                0
+            ), axis=1
+        )
 
-    # ---------------- SAVE HISTORY ----------------
-    history_file = "ride_history.csv"
+        # ---------------- SAVE HISTORY ----------------
+        history_file = "ride_history.csv"
 
-    new_entry = {
-        "date": datetime.now(),
-        "avg_fatigue": df["fatigue_score"].mean(),
-        "avg_hr": df["heart_rate"].mean(),
-        "avg_speed": df["speed"].mean()
-    }
+        new_entry = {
+            "date": datetime.now(),
+            "avg_fatigue": df["fatigue_score"].mean(),
+            "avg_hr": df["heart_rate"].mean(),
+            "avg_speed": df["speed"].mean() if "speed" in df.columns else 0
+        }
 
-    new_df = pd.DataFrame([new_entry])
+        new_df = pd.DataFrame([new_entry])
 
-    if os.path.exists(history_file):
-        hist = pd.read_csv(history_file)
-        hist = pd.concat([hist, new_df], ignore_index=True)
-    else:
-        hist = new_df
+        if os.path.exists(history_file):
+            hist = pd.read_csv(history_file)
+            hist = pd.concat([hist, new_df], ignore_index=True)
+        else:
+            hist = new_df
 
-    hist.to_csv(history_file, index=False)
+        hist.to_csv(history_file, index=False)
+
+    # Load updated history ONCE after all uploads
+    hist = pd.read_csv("ride_history.csv")
 
     # ---------------- DEBUG (REMOVE LATER) ----------------
     st.write("History length:", len(hist))
