@@ -7,7 +7,7 @@ from fatigue_model import calculate_fatigue
 st.set_page_config(page_title="RideX AI", layout="wide")
 
 st.title("🚴 RideX AI — Fatigue Analyzer")
-st.write("Understand your ride — not just track it.")
+st.write("Understand how hard your ride actually was — not just distance or speed.")
 
 # ---------------- HOW TO USE ----------------
 st.subheader("📥 How to Use")
@@ -21,14 +21,10 @@ Upload a CSV file with the following columns:
 - speed (optional)
 
 Each row should represent a moment in your ride.
-
-You can export this data from apps like:
-- Strava (export activity as CSV)
-- Garmin Connect
-- Fitbit / Google Fit
-
-If unsure, download the sample CSV below.
 """)
+
+# 🔥 NEW UX LINE (what your dad was missing)
+st.info("💡 Tip: Export your ride data from apps like Strava, Garmin, or Fitbit as CSV and upload it here.")
 
 # ---------------- SAMPLE CSV ----------------
 sample_csv = """heart_rate,cadence,slope,speed
@@ -100,11 +96,9 @@ if uploaded_file:
         st.dataframe(df.head())
 
         # Validate required columns
-        required_cols = ['heart_rate']
-        for col in required_cols:
-            if col not in df.columns:
-                st.error(f"Missing required column: {col}")
-                st.stop()
+        if 'heart_rate' not in df.columns:
+            st.error("Missing required column: heart_rate")
+            st.stop()
 
         # Add missing optional columns
         if 'cadence' not in df:
@@ -114,7 +108,7 @@ if uploaded_file:
         if 'elevation_m' not in df:
             df['elevation_m'] = 0
 
-        # Duration (simple assumption)
+        # Duration approximation
         df['duration_min'] = df.index / 60
 
         # Calculate fatigue
@@ -139,7 +133,6 @@ if uploaded_file:
         st.subheader("📈 Fatigue Curve")
 
         fig, ax = plt.subplots(figsize=(10, 4))
-
         ax.plot(df['fatigue_score'], linewidth=2)
 
         ax.axhline(40, linestyle='--', alpha=0.7)
@@ -160,7 +153,7 @@ if uploaded_file:
         if 'speed' in df.columns:
             col3.metric("Avg Speed", round(df['speed'].mean(), 1))
 
-        # ---------------- ZONE BREAKDOWN ----------------
+        # ---------------- ZONES ----------------
         low = (df['fatigue_score'] < 40).sum()
         moderate = ((df['fatigue_score'] >= 40) & (df['fatigue_score'] < 65)).sum()
         high = (df['fatigue_score'] >= 65).sum()
