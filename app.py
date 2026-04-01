@@ -16,7 +16,7 @@ resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 60)
 
 max_hr = 220 - age
 
-# ---------------- CACHE ----------------
+# ---------------- LOAD FILE ----------------
 @st.cache_data
 def load_file(file_bytes, name):
     file = BytesIO(file_bytes)
@@ -42,7 +42,7 @@ def load_file(file_bytes, name):
         else:
             df = pd.read_csv(file)
             df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="s")
-            df.rename(columns={"heart_rate":"hr"}, inplace=True)
+            df.rename(columns={"heart_rate": "hr"}, inplace=True)
 
         df["time"] = pd.to_datetime(df["time"]).dt.tz_localize(None)
         return df
@@ -55,7 +55,7 @@ def compute_load(df):
     df = df.copy()
     df["intensity"] = df["hr"] / max_hr
     df["intensity"] = df["intensity"].clip(0, 1)
-    df["load"] = (df["intensity"]**2) * 80
+    df["load"] = (df["intensity"] ** 2) * 80
     return df
 
 # ---------------- UPLOAD ----------------
@@ -115,9 +115,15 @@ if uploaded:
     st.subheader("📊 Training Load")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("ATL", round(history["ATL"].iloc[-1],1))
-    c2.metric("CTL", round(history["CTL"].iloc[-1],1))
-    c3.metric("TSB", round(history["TSB"].iloc[-1],1))
+    c1.metric("ATL (Fatigue)", round(history["ATL"].iloc[-1], 1))
+    c2.metric("CTL (Fitness)", round(history["CTL"].iloc[-1], 1))
+    c3.metric("TSB (Form)", round(history["TSB"].iloc[-1], 1))
+
+    st.info("""
+    ATL = short-term fatigue  
+    CTL = long-term fitness  
+    TSB = readiness  
+    """)
 
     # ---------------- GRAPH ----------------
     st.subheader("📈 Trend")
@@ -150,7 +156,7 @@ if uploaded:
         st.error("Fatigued")
 
 # =========================
-# ⚡ LIVE RIDE MODE (PACE ENGINE)
+# ⚡ LIVE RIDE MODE (FIXED)
 # =========================
 
 st.divider()
@@ -169,7 +175,6 @@ if live:
         if st.button("▶ Start Ride"):
 
             placeholder = st.empty()
-
             fatigue = 0
 
             for i in range(len(df_live)):
@@ -180,45 +185,45 @@ if live:
 
                 intensity = hr / max_hr
 
-                # 🔥 EXPONENTIAL FATIGUE MODEL
-                fatigue_rate = (intensity ** 3) * 120
-                fatigue += fatigue_rate * 0.1
+                # 🔥 FIXED FATIGUE MODEL (bounded)
+                fatigue_rate = (intensity ** 3) * 25
+                fatigue += fatigue_rate * 0.05
+                fatigue = min(fatigue, 100)
 
-                # 🔮 FUTURE SIMULATION (5 mins)
-                sim_fatigue = fatigue
-                sim_rate = fatigue_rate
-
-                for _ in range(50):
-                    sim_rate = (intensity ** 3) * 120
-                    sim_fatigue += sim_rate * 0.1
-
-                # ⏱ TIME TO EXHAUSTION
-                if fatigue_rate > 0:
-                    tte = int((100 - fatigue) / (fatigue_rate + 1e-5))
+                # ⏱ FIXED TTE (never negative)
+                if fatigue >= 99:
+                    tte = 0
+                elif fatigue_rate > 0:
+                    tte = int((100 - fatigue) / (fatigue_rate + 1e-6))
                 else:
                     tte = 999
 
-                # 🎯 OPTIMAL HR ZONE
+                # 🎯 HR ZONE
                 optimal_low = int(max_hr * 0.65)
                 optimal_high = int(max_hr * 0.75)
 
                 # 🧠 DECISION ENGINE
-                if intensity > 0.85:
-                    decision = "⚠️ Too hard — back off now"
-                elif intensity > 0.75:
-                    decision = "⚖️ On limit — hold carefully"
+                if fatigue > 85:
+                    decision = "🛑 Near exhaustion — back off immediately"
+                elif fatigue > 70:
+                    decision = "⚠️ High fatigue — reduce effort"
+                elif intensity > 0.85:
+                    decision = "⚠️ Unsustainable — will burn out"
+                elif intensity > 0.7:
+                    decision = "⚖️ Strong pace — monitor fatigue"
                 elif intensity > 0.6:
-                    decision = "✅ Sustainable pace"
+                    decision = "✅ Sustainable endurance pace"
                 else:
                     decision = "🔥 You can push harder"
 
                 with placeholder.container():
 
                     st.metric("Heart Rate", int(hr))
-                    st.metric("Fatigue", round(fatigue,1))
+                    st.metric("Fatigue (0-100)", round(fatigue, 1))
                     st.metric("Time to Exhaustion (sec)", tte)
 
-                    st.info(f"🎯 Optimal HR Zone: {optimal_low} - {optimal_high}")
+                    st.info(f"🎯 Optimal HR Zone: {optimal_low}-{optimal_high}")
                     st.subheader(decision)
 
-                time.sleep(0.01)
+                # 🐢 SLOWER FOR VISUALIZATION
+                time.sleep(0.15)
