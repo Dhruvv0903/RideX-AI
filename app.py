@@ -22,14 +22,11 @@ Supported formats:
 
 Required:
 - Heart rate data
-
-Optional:
-- Cadence, speed, elevation
 """)
 
 st.info("💡 RideX automatically adapts to different file formats.")
 
-# ---------------- SAMPLE FILE (REAL TCX) ----------------
+# ---------------- SAMPLE FILE ----------------
 try:
     with open("exercise_tcx_file.tcx", "rb") as f:
         tcx_data = f.read()
@@ -41,10 +38,11 @@ try:
         mime="application/xml"
     )
 
-    st.caption("💡 This is a real ride file — download it and upload it to see how RideX analyzes actual cycling data.")
+    st.caption("💡 Download this real ride file and upload it to test RideX instantly.")
 
 except FileNotFoundError:
-    st.warning("Sample TCX file not found. Make sure 'exercise_tcx_file.tcx' is in the same folder as app.py.")
+    st.warning("Sample TCX file not found.")
+
 # ---------------- FILE UPLOAD ----------------
 uploaded_file = st.file_uploader("Upload ride file", type=["csv", "tcx"])
 
@@ -56,7 +54,6 @@ def parse_tcx(file):
     ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
     data = []
-
     prev_time = None
     prev_dist = None
 
@@ -80,7 +77,6 @@ def parse_tcx(file):
             if time_diff > 0 and dist_diff >= 0:
                 speed = (dist_diff / time_diff) * 3.6
 
-                # cap unrealistic spikes
                 if speed > 80:
                     speed = 0
 
@@ -190,7 +186,6 @@ if uploaded_file:
             st.error("No valid heart rate data found.")
             st.stop()
 
-        # detect if speed existed originally
         original_speed_missing = df['speed'].sum() == 0
 
         df['duration_min'] = df.index / 60
@@ -208,6 +203,7 @@ if uploaded_file:
 
         latest = df['fatigue_score'].iloc[-1]
 
+        # ---------------- OUTPUT ----------------
         st.subheader("📍 Current State")
         st.write(f"Fatigue Level: {fatigue_zone(latest)}")
 
@@ -219,59 +215,57 @@ if uploaded_file:
         ax.axhline(40, linestyle='--', alpha=0.7)
         ax.axhline(65, linestyle='--', alpha=0.7)
 
-        ax.set_title("Fatigue Over Time")
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Fatigue Score")
-
         st.pyplot(fig)
 
-        # ---------------- METRICS ----------------
         col1, col2, col3 = st.columns(3)
-
         col1.metric("Max Fatigue", df['fatigue_score'].max())
         col2.metric("Average Fatigue", round(df['fatigue_score'].mean(), 1))
         col3.metric("Avg Speed (computed)", round(df['speed'].mean(), 1))
 
-        # explain speed logic
         st.caption("ℹ️ Speed is derived from distance and time when not directly available.")
 
         if original_speed_missing:
             st.info("Speed data was not present in the file — calculated using distance/time.")
 
-        # ---------------- ZONES ----------------
-        st.subheader("⏱ Time in Zones")
+        # ---------------- RIDE TYPE ----------------
+        st.subheader("⚡ Ride Type")
 
-        total = len(df)
-        low = (df['fatigue_score'] < 40).sum()
-        moderate = ((df['fatigue_score'] >= 40) & (df['fatigue_score'] < 65)).sum()
-        high = (df['fatigue_score'] >= 65).sum()
+        avg_fatigue = df['fatigue_score'].mean()
 
-        st.write(f"🟢 Low: {round(low/total*100,1)}%")
-        st.write(f"🟡 Moderate: {round(moderate/total*100,1)}%")
-        st.write(f"🔴 High: {round(high/total*100,1)}%")
+        if avg_fatigue < 40:
+            st.write("Endurance Ride")
+        elif avg_fatigue < 65:
+            st.write("Tempo / Moderate Ride")
+        else:
+            st.write("High Intensity Ride")
 
-        # ---------------- SUMMARY ----------------
-        st.subheader("📊 Ride Summary")
-        st.write(f"Peak Fatigue: {df['fatigue_score'].max()}")
-        st.write(f"Time in High Fatigue: {high} data points")
+        # ---------------- KEY DRIVER ----------------
+        st.subheader("📌 Key Driver")
 
-        # ---------------- VERDICT ----------------
-        st.subheader("🏁 Final Verdict")
+        if df['heart_rate'].mean() > 150:
+            st.write("Your fatigue was mainly driven by high cardiovascular load.")
+        elif df['slope'].mean() > 3:
+            st.write("Climbing effort contributed significantly to fatigue.")
+        else:
+            st.write("Fatigue was primarily due to sustained duration.")
+
+        # ---------------- RECOVERY ----------------
+        st.subheader("🛠 What You Should Do Next")
 
         if latest < 40:
-            st.success("Endurance ride — you can train again tomorrow.")
+            st.write("• You can do another moderate ride tomorrow")
+            st.write("• Consider increasing intensity slightly next session")
         elif latest < 65:
-            st.warning("Moderate strain — consider a light recovery ride next.")
+            st.write("• Go for a light recovery ride or rest")
+            st.write("• Avoid high intensity training tomorrow")
         else:
-            st.error("High fatigue — recovery strongly recommended.")
+            st.write("• Take a full rest day")
+            st.write("• Focus on hydration and recovery")
 
         # ---------------- INSIGHTS ----------------
         st.subheader("🧠 Insights")
         for insight in generate_insights(df):
             st.write("- " + insight)
-
-        st.subheader("💡 Key Takeaway")
-        st.write("Your fatigue was primarily influenced by intensity, cadence, and sustained effort.")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
