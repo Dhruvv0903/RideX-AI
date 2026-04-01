@@ -31,7 +31,64 @@ def read_live_hr():
                 except:
                     return None
     return None
+st.divider()
+st.header("⚡ Live Ride Mode (Simulation from File)")
 
+uploaded_live = st.file_uploader(
+    "Upload a ride file to simulate live tracking",
+    type=["csv", "tcx"],
+    key="live_sim"
+)
+
+def load_live_data(file):
+    if file.name.endswith(".tcx"):
+        return parse_tcx(file)
+    else:
+        df = pd.read_csv(file)
+        df["time"] = pd.date_range(start="2025-01-01", periods=len(df), freq="S")
+        return df
+
+if uploaded_live:
+
+    df_live = load_live_data(uploaded_live)
+
+    if st.button("▶️ Start Simulation"):
+
+        placeholder = st.empty()
+
+        fatigue = 0
+
+        for i in range(len(df_live)):
+
+            hr = df_live.iloc[i]["heart_rate"]
+
+            if hr == 0:
+                continue
+
+            intensity = hr / max_hr
+            fatigue += intensity * 0.4  # tuned growth
+
+            with placeholder.container():
+                st.subheader("🚴 Live Ride")
+
+                st.metric("Heart Rate", f"{hr} bpm")
+                st.metric("Fatigue Score", round(fatigue, 1))
+
+                # zones
+                if intensity < 0.6:
+                    st.success("🟢 Easy Zone")
+                elif intensity < 0.8:
+                    st.warning("🟡 Moderate Zone")
+                else:
+                    st.error("🔴 High Intensity")
+
+                # fatigue alerts
+                if fatigue > 70:
+                    st.error("⚠️ You’re overcooking it — back off")
+                elif fatigue > 50:
+                    st.warning("⚠️ Fatigue building — be careful")
+
+            time.sleep(0.1)  # speed of simulation
 # ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
     "Upload ride files", type=["csv", "tcx"], accept_multiple_files=True
