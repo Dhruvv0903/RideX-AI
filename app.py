@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import xml.etree.ElementTree as ET
 from fatigue_model import calculate_fatigue
 
 # ---------------- CONFIG ----------------
@@ -13,16 +14,20 @@ st.write("Understand how hard your ride actually was — not just distance or sp
 st.subheader("📥 How to Use")
 
 st.write("""
-Upload a CSV file exported from fitness apps like Strava, Fitbit, Garmin, or Apple Health.
+Upload a ride file from apps like Strava, Garmin, or Fitbit.
+
+Supported formats:
+- CSV
+- TCX (Garmin / Fitbit)
 
 Required:
-- heart rate data (any format)
+- Heart rate data
 
 Optional:
-- cadence, speed, elevation
+- Cadence, speed, elevation
 """)
 
-st.info("💡 Tip: Different apps export different formats — RideX will automatically adapt your data.")
+st.info("💡 RideX automatically adapts to different file formats.")
 
 # ---------------- SAMPLE CSV ----------------
 sample_csv = """heart_rate,cadence,slope,speed
@@ -40,10 +45,33 @@ st.download_button(
 )
 
 # ---------------- FILE UPLOAD ----------------
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Upload ride file", type=["csv", "tcx"])
 
 
-# ---------------- NORMALIZATION FUNCTION ----------------
+# ---------------- TCX PARSER ----------------
+def parse_tcx(file):
+    tree = ET.parse(file)
+    root = tree.getroot()
+
+    ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
+
+    data = []
+
+    for trackpoint in root.findall('.//ns:Trackpoint', ns):
+        hr = trackpoint.find('.//ns:HeartRateBpm/ns:Value', ns)
+        cadence = trackpoint.find('.//ns:Cadence', ns)
+        altitude = trackpoint.find('.//ns:AltitudeMeters', ns)
+
+        data.append({
+            'heart_rate': int(hr.text) if hr is not None else 0,
+            'cadence': int(cadence.text) if cadence is not None else 0,
+            'elevation_m': float(altitude.text) if altitude is not None else 0
+        })
+
+    return pd.DataFrame(data)
+
+
+# ---------------- NORMALIZATION ----------------
 def normalize_data(df):
     df.columns = df.columns.str.lower().str.replace('-', '_')
 
@@ -61,7 +89,6 @@ def normalize_data(df):
                 df[standard_col] = df[col]
                 break
 
-    # Fill missing columns
     for col in ['heart_rate', 'cadence', 'speed', 'slope', 'elevation_m']:
         if col not in df.columns:
             df[col] = 0
@@ -111,15 +138,26 @@ def generate_insights(df):
 if uploaded_file:
 
     try:
-        df = pd.read_csv(uploaded_file)
+        file_name = uploaded_file.name.lower()
+
+        # Detect file type
+        if file_name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+
+        elif file_name.endswith(".tcx"):
+            df = parse_tcx(uploaded_file)
+
+        else:
+            st.error("Unsupported file format. Upload CSV or TCX.")
+            st.stop()
 
         st.subheader("📄 Raw Data Preview")
         st.dataframe(df.head())
 
-        # Normalize data
+        # Normalize
         df = normalize_data(df)
 
-        # Validate core data
+        # Validate heart rate
         if df['heart_rate'].sum() == 0:
             st.error("No valid heart rate data found.")
             st.stop()
@@ -153,6 +191,10 @@ if uploaded_file:
         ax.axhline(40, linestyle='--', alpha=0.7)
         ax.axhline(65, linestyle='--', alpha=0.7)
 
+        ax.set_title("Fatigue Over Time")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Fatigue Score")
+
         st.pyplot(fig)
 
         col1, col2, col3 = st.columns(3)
@@ -160,9 +202,34 @@ if uploaded_file:
         col2.metric("Average Fatigue", round(df['fatigue_score'].mean(), 1))
         col3.metric("Avg Speed", round(df['speed'].mean(), 1))
 
+        st.subheader("⏱ Time in Zones")
+        total = len(df)
+        low = (df['fatigue_score'] < 40).sum()
+        moderate = ((df['fatigue_score'] >= 40) & (df['fatigue_score'] < 65)).sum()
+        high = (df['fatigue_score'] >= 65).sum()
+
+        st.write(f"🟢 Low: {round(low/total*100,1)}%")
+        st.write(f"🟡 Moderate: {round(moderate/total*100,1)}%")
+        st.write(f"🔴 High: {round(high/total*100,1)}%")
+
+        st.subheader("📊 Ride Summary")
+        st.write(f"Peak Fatigue: {df['fatigue_score'].max()}")
+        st.write(f"Time in High Fatigue: {high} data points")
+
+        st.subheader("🏁 Final Verdict")
+        if latest < 40:
+            st.success("Endurance ride — you can train again tomorrow.")
+        elif latest < 65:
+            st.warning("Moderate strain — consider a light recovery ride next.")
+        else:
+            st.error("High fatigue — recovery strongly recommended.")
+
         st.subheader("🧠 Insights")
         for insight in generate_insights(df):
             st.write("- " + insight)
+
+        st.subheader("💡 Key Takeaway")
+        st.write("Your fatigue was primarily influenced by intensity, cadence, and sustained effort.")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
