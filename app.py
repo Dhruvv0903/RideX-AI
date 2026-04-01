@@ -2,197 +2,207 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
-import os
 from datetime import datetime
-from fatigue_model import calculate_fatigue
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
 
 st.title("🚴 RideX AI — Performance Engine")
 
-# ---------------- SAMPLE FILE ----------------
-try:
-    with open("exercise_tcx_file.tcx", "rb") as f:
-        tcx_data = f.read()
-
-    st.download_button(
-        label="📄 Download Sample Ride",
-        data=tcx_data,
-        file_name="ridex_sample.tcx",
-        mime="application/xml"
-    )
-except:
-    st.warning("Sample file not found")
-
-# ---------------- UPLOADER ----------------
+# ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
     "Upload ride files",
     type=["csv", "tcx"],
     accept_multiple_files=True
 )
 
-if uploaded_files:
-    st.write(f"📂 {len(uploaded_files)} file(s) uploaded")
-
 # ---------------- TCX PARSER ----------------
 def parse_tcx(file):
     tree = ET.parse(file)
     root = tree.getroot()
+
     ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
     data = []
-    prev_time, prev_dist = None, None
+
+    times = []
+    distances = []
+    heart_rates = []
+    cadences = []
 
     for tp in root.findall('.//ns:Trackpoint', ns):
-        time_elem = tp.find('.//ns:Time', ns)
-        dist_elem = tp.find('.//ns:DistanceMeters', ns)
-        hr = tp.find('.//ns:HeartRateBpm/ns:Value', ns)
 
-        curr_time = pd.to_datetime(time_elem.text) if time_elem is not None else None
-        curr_dist = float(dist_elem.text) if dist_elem is not None else None
+        time_elem = tp.find('ns:Time', ns)
+        dist_elem = tp.find('ns:DistanceMeters', ns)
+        hr_elem = tp.find('.//ns:HeartRateBpm/ns:Value', ns)
+        cad_elem = tp.find('ns:Cadence', ns)
 
-        speed = 0
-        if prev_time is not None and prev_dist is not None and curr_time is not None and curr_dist is not None:
-            t = (curr_time - prev_time).total_seconds()
-            d = curr_dist - prev_dist
-            if t > 0 and d >= 0:
-                speed = (d / t) * 3.6
-                if speed > 80:
-                    speed = 0
+        if time_elem is not None:
+            times.append(pd.to_datetime(time_elem.text))
 
-        data.append({
-            "heart_rate": int(hr.text) if hr is not None else 0,
-            "speed": speed
-        })
+        distances.append(float(dist_elem.text) if dist_elem is not None else None)
+        heart_rates.append(int(hr_elem.text) if hr_elem is not None else 0)
+        cadences.append(int(cad_elem.text) if cad_elem is not None else 0)
 
-        prev_time, prev_dist = curr_time, curr_dist
+    df = pd.DataFrame({
+        "time": times,
+        "distance": distances,
+        "heart_rate": heart_rates,
+        "cadence": cadences
+    })
 
-    df = pd.DataFrame(data)
+    df = df.dropna(subset=["time"])
 
-    if "speed" in df.columns:
-        df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
+    # SPEED CALC
+    df["speed"] = 0
+    for i in range(1, len(df)):
+        dt = (df.loc[i, "time"] - df.loc[i-1, "time"]).total_seconds()
+        dd = df.loc[i, "distance"] - df.loc[i-1, "distance"] if df.loc[i, "distance"] and df.loc[i-1, "distance"] else 0
+
+        if dt > 0:
+            speed = (dd / dt) * 3.6
+            if 0 <= speed <= 80:
+                df.loc[i, "speed"] = speed
+
+    df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
 
     return df
+
+
+# ---------------- FATIGUE MODEL ----------------
+def calculate_fatigue(hr, cadence, duration_min):
+    hr_factor = min(hr / 195, 1)
+    duration_factor = min(duration_min / 120, 1)
+
+    cadence_penalty = 0.3 if cadence < 70 else 0.1 if cadence < 80 else 0
+
+    fatigue = (
+        hr_factor * 50 +
+        duration_factor * 40 +
+        cadence_penalty * 10
+    )
+
+    return min(fatigue, 100)
+
 
 # ---------------- MAIN ----------------
 if uploaded_files:
 
-    history_file = "ride_history.csv"
+    ride_summaries = []
 
-    for uploaded_file in uploaded_files:
+    for file in uploaded_files:
 
-        # -------- LOAD --------
-        if uploaded_file.name.endswith(".tcx"):
-            df = parse_tcx(uploaded_file)
+        if file.name.endswith(".tcx"):
+            df = parse_tcx(file)
         else:
-            df = pd.read_csv(uploaded_file)
+            continue
 
-        # -------- BASIC PROCESS --------
-        df["duration_min"] = df.index / 60
+        if df.empty:
+            continue
 
-        df["fatigue_score"] = df.apply(
-            lambda row: calculate_fatigue(
-                row.get("heart_rate", 0),
-                0,
-                0,
-                row["duration_min"],
-                0
-            ),
-            axis=1
-        )
+        # Duration
+        duration_sec = (df["time"].iloc[-1] - df["time"].iloc[0]).total_seconds()
+        duration_min = duration_sec / 60
 
-        # -------- SAVE HISTORY --------
-        avg_speed = df["speed"].mean() if "speed" in df.columns else None
+        avg_hr = df["heart_rate"].mean()
+        avg_cad = df["cadence"].mean()
+        avg_speed = df["speed"].mean()
 
-        new_entry = {
-            "date": datetime.now(),
-            "avg_fatigue": df["fatigue_score"].mean(),
-            "avg_hr": df["heart_rate"].mean(),
-            "avg_speed": avg_speed if avg_speed is not None else None
-        }
+        fatigue = calculate_fatigue(avg_hr, avg_cad, duration_min)
 
-        new_df = pd.DataFrame([new_entry])
+        # SESSION LOAD (key fix)
+        session_load = fatigue * duration_min / 60
 
-        if os.path.exists(history_file):
-            hist = pd.read_csv(history_file)
-            hist = pd.concat([hist, new_df], ignore_index=True)
+        ride_summaries.append({
+            "date": df["time"].iloc[0],
+            "fatigue": fatigue,
+            "load": session_load,
+            "avg_hr": avg_hr,
+            "avg_speed": avg_speed
+        })
+
+    history = pd.DataFrame(ride_summaries).sort_values("date")
+
+    st.subheader(f"📂 {len(history)} ride(s) processed")
+    st.dataframe(history)
+
+    # ---------------- TRAINING LOAD MODEL ----------------
+    ATL = []
+    CTL = []
+
+    atl = 0
+    ctl = 0
+
+    last_date = None
+
+    for _, row in history.iterrows():
+
+        if last_date is None:
+            days = 1
         else:
-            hist = new_df
+            days = (row["date"] - last_date).days
+            if days == 0:
+                days = 1
 
-        hist.to_csv(history_file, index=False)
+        decay_atl = pow(0.5, days / 7)
+        decay_ctl = pow(0.5, days / 42)
 
-    # -------- LOAD UPDATED HISTORY --------
-    hist = pd.read_csv(history_file)
+        atl = atl * decay_atl + row["load"]
+        ctl = ctl * decay_ctl + row["load"]
 
-    # DEBUG (remove later)
-    st.write("History length:", len(hist))
-    st.dataframe(hist.tail())
+        ATL.append(atl)
+        CTL.append(ctl)
 
-    # ---------------- TRAINING LOAD ----------------
+        last_date = row["date"]
+
+    history["ATL"] = ATL
+    history["CTL"] = CTL
+    history["TSB"] = history["CTL"] - history["ATL"]
+
+    # ---------------- UI ----------------
     st.subheader("📊 Training Load")
 
-    hist["date"] = pd.to_datetime(hist["date"])
-    hist = hist.sort_values("date")
-
-    atl, ctl = [], []
-    atl_value, ctl_value = 0, 0
-
-    for _, row in hist.iterrows():
-        load = row["avg_fatigue"]
-
-        atl_value = atl_value + (load - atl_value) * (1/7)
-        ctl_value = ctl_value + (load - ctl_value) * (1/30)
-
-        atl.append(atl_value)
-        ctl.append(ctl_value)
-
-    hist["ATL"] = atl
-    hist["CTL"] = ctl
-    hist["TSB"] = hist["CTL"] - hist["ATL"]
-
-    latest_row = hist.iloc[-1]
-
     col1, col2, col3 = st.columns(3)
-    col1.metric("Fatigue (ATL)", round(latest_row["ATL"], 1))
-    col2.metric("Fitness (CTL)", round(latest_row["CTL"], 1))
-    col3.metric("Form (TSB)", round(latest_row["TSB"], 1))
 
-    # ---------------- READINESS ----------------
-    st.subheader("🧠 Readiness")
-
-    if latest_row["TSB"] > 10:
-        st.success("Fresh — ready for high intensity")
-    elif latest_row["TSB"] > -5:
-        st.info("Balanced — maintain training")
-    else:
-        st.warning("Fatigued — recovery needed")
+    col1.metric("Fatigue (ATL — Acute Training Load)", round(history["ATL"].iloc[-1], 1))
+    col2.metric("Fitness (CTL — Chronic Training Load)", round(history["CTL"].iloc[-1], 1))
+    col3.metric("Form (TSB — Training Stress Balance)", round(history["TSB"].iloc[-1], 1))
 
     # ---------------- GRAPH ----------------
     st.subheader("📈 Training Load Trend")
 
-    if len(hist) > 1:
-        fig, ax = plt.subplots()
+    fig, ax = plt.subplots()
 
-        ax.plot(hist["ATL"], label="Fatigue (ATL)")
-        ax.plot(hist["CTL"], label="Fitness (CTL)")
-        ax.plot(hist["TSB"], label="Form (TSB)")
+    ax.plot(history["date"], history["ATL"], label="Fatigue (ATL)")
+    ax.plot(history["date"], history["CTL"], label="Fitness (CTL)")
+    ax.plot(history["date"], history["TSB"], label="Form (TSB)")
 
-        ax.legend()
-        st.pyplot(fig)
+    ax.legend()
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Load")
+
+    st.pyplot(fig)
+
+    # ---------------- READINESS ----------------
+    st.subheader("🧠 Readiness")
+
+    tsb = history["TSB"].iloc[-1]
+
+    if tsb > 10:
+        st.success("Fresh — ready for hard effort")
+    elif tsb > -10:
+        st.warning("Neutral — train normally")
     else:
-        st.info("Upload more rides to see trends.")
+        st.error("Fatigued — recovery needed")
 
     # ---------------- CURRENT RIDE ----------------
-    st.subheader("📍 Current Ride")
+    st.subheader("📍 Latest Ride")
 
-    latest_fatigue = df["fatigue_score"].iloc[-1]
-    st.write(f"Fatigue Score: {round(latest_fatigue,1)}")
+    latest = history.iloc[-1]
 
-    # ---------------- SPEED DISPLAY FIX ----------------
-    st.subheader("🚴 Speed")
+    st.write(f"Fatigue Score: {round(latest['fatigue'],1)}")
 
-    if "speed" in df.columns and df["speed"].sum() > 0:
-        st.metric("Avg Speed", round(df["speed"].mean(), 1))
+    if latest["avg_speed"] > 0:
+        st.write(f"Avg Speed: {round(latest['avg_speed'],1)} km/h")
     else:
         st.write("Avg Speed: Not available")
