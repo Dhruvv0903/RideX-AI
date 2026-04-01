@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
-import time
 import numpy as np
+import time
 
 st.set_page_config(layout="wide")
 
@@ -77,11 +77,10 @@ def compute_fatigue(df, resting_hr, max_hr):
 # ==============================
 def generate_sample_rides():
     rides = []
-    base_date = pd.Timestamp.now()
+    base = pd.Timestamp.now()
 
     for d in range(5):
-        times = pd.date_range(end=base_date - pd.Timedelta(days=d),
-                              periods=200, freq="s")
+        times = pd.date_range(end=base - pd.Timedelta(days=d), periods=200, freq="s")
 
         hr = 120 + 25 * np.sin(np.linspace(0, 6, 200)) + np.random.normal(0, 3, 200)
 
@@ -106,6 +105,9 @@ mode = st.radio("Mode", ["Upload Files", "Sample Data"])
 history = []
 all_hr = []
 
+# ==============================
+# LOAD DATA
+# ==============================
 if mode == "Upload Files":
     files = st.file_uploader("Upload TCX/CSV", type=["tcx", "csv"], accept_multiple_files=True)
 
@@ -174,14 +176,35 @@ if history:
     c2.metric("CTL", f"{CTL:.1f}")
     c3.metric("TSB", f"{TSB:.1f}")
 
+    st.info("""
+    ATL = Acute Training Load (short-term fatigue)  
+    CTL = Chronic Training Load (long-term fitness)  
+    TSB = Training Stress Balance (readiness)
+    """)
+
     # ==============================
-    # DAYS SINCE LAST (RESTORED)
+    # DAYS SINCE LAST RIDE
     # ==============================
     last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
     today = pd.Timestamp.now().tz_localize(None)
     gap = (today - last_date).days
 
     st.write(f"📅 Days since last ride: {gap}")
+
+    # ==============================
+    # READINESS
+    # ==============================
+    if gap > 7:
+        readiness = "Fresh — recovered"
+    elif TSB > 10:
+        readiness = "Fresh — push hard"
+    elif TSB < -10:
+        readiness = "Fatigued — recover"
+    else:
+        readiness = "Moderate — train smart"
+
+    st.subheader("🧠 Readiness")
+    st.success(readiness)
 
     # ==============================
     # GRAPH
@@ -196,25 +219,58 @@ if history:
     st.pyplot(fig)
 
     # ==============================
-    # TOMORROW (FIXED LOGIC)
+    # 🔮 TOMORROW PREDICTION (FULL)
     # ==============================
     st.subheader("🔮 Tomorrow Prediction")
 
-    if gap > 5:
-        rec = "Light"
-    elif TSB < -10:
-        rec = "Rest"
-    elif TSB <= 5:
-        rec = "Light"
-    else:
-        rec = "Hard"
+    scenarios = ["Rest", "Light", "Hard"]
+    loads = [0, 30, 60]
+    rows = []
 
-    if rec == "Rest":
-        st.warning("🛑 Recommended: Rest Day")
-    elif rec == "Light":
-        st.info("🚴 Recommended: Light Ride")
+    for i in range(3):
+        load = loads[i]
+
+        atl_n = ATL + (load - ATL) / 7
+        ctl_n = CTL + (load - CTL) / 42
+        tsb_n = ctl_n - atl_n
+
+        rows.append({
+            "Scenario": scenarios[i],
+            "ATL": round(atl_n, 1),
+            "CTL": round(ctl_n, 1),
+            "TSB": round(tsb_n, 1)
+        })
+
+    pred_df = pd.DataFrame(rows)
+    st.dataframe(pred_df)
+
+    # ==============================
+    # 🧠 DECISION ENGINE (CORRECT)
+    # ==============================
+    best_row = pred_df.loc[pred_df["TSB"].idxmax()]
+    best = best_row["Scenario"]
+
+    # gap correction
+    if gap > 5:
+        final = "Light"
     else:
-        st.success("🔥 Recommended: Hard Training Day")
+        final = best
+
+    # fatigue override
+    if TSB < -10:
+        final = "Rest"
+
+    # ==============================
+    # FINAL OUTPUT
+    # ==============================
+    st.subheader("🧠 Tomorrow Recommendation")
+
+    if final == "Rest":
+        st.warning("🛑 Rest Day Recommended")
+    elif final == "Light":
+        st.info("🚴 Light Ride Recommended")
+    else:
+        st.success("🔥 Hard Training Day Recommended")
 
 
 # ==============================
