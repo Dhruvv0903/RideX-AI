@@ -23,7 +23,7 @@ try:
         mime="application/xml"
     )
 except:
-    pass
+    st.warning("Sample file not found")
 
 uploaded_file = st.file_uploader("Upload ride file", type=["csv", "tcx"])
 
@@ -67,11 +67,13 @@ def parse_tcx(file):
 # ---------------- MAIN ----------------
 if uploaded_file:
 
+    # Load data
     if uploaded_file.name.endswith(".tcx"):
         df = parse_tcx(uploaded_file)
     else:
         df = pd.read_csv(uploaded_file)
 
+    # Basic processing
     df["duration_min"] = df.index / 60
 
     df["fatigue_score"] = df.apply(
@@ -106,7 +108,11 @@ if uploaded_file:
 
     hist.to_csv(history_file, index=False)
 
-    # ---------------- TRAINING LOAD (EXPONENTIAL) ----------------
+    # ---------------- DEBUG (REMOVE LATER) ----------------
+    st.write("History length:", len(hist))
+    st.dataframe(hist.tail())
+
+    # ---------------- TRAINING LOAD ----------------
     st.subheader("📊 Training Load (Advanced)")
 
     hist["date"] = pd.to_datetime(hist["date"])
@@ -143,7 +149,7 @@ if uploaded_file:
     col2.metric("Fitness (CTL)", round(chronic,1))
     col3.metric("Form (TSB)", round(balance,1))
 
-    # ---------------- INTERPRETATION ----------------
+    # ---------------- READINESS ----------------
     st.subheader("🧠 Readiness")
 
     if balance > 10:
@@ -153,19 +159,21 @@ if uploaded_file:
     else:
         st.warning("Fatigued — recovery needed")
 
-    # ---------------- GRAPH ----------------
+    # ---------------- GRAPH FIX ----------------
     st.subheader("📈 Training Load Trend")
 
-    fig, ax = plt.subplots()
+    if len(hist) > 1:
+        fig, ax = plt.subplots()
 
-    ax.plot(hist["ATL"], label="Fatigue (ATL)")
-    ax.plot(hist["CTL"], label="Fitness (CTL)")
-    ax.plot(hist["TSB"], label="Form (TSB)")
+        ax.plot(hist["ATL"], label="Fatigue (ATL)")
+        ax.plot(hist["CTL"], label="Fitness (CTL)")
+        ax.plot(hist["TSB"], label="Form (TSB)")
 
-    ax.legend()
-    st.pyplot(fig)
+        ax.legend()
+        st.pyplot(fig)
+    else:
+        st.info("Upload more rides to see training trends.")
 
     # ---------------- CURRENT ----------------
     st.subheader("📍 Current Ride")
-
     st.write(f"Fatigue Score: {round(latest,1)}")
