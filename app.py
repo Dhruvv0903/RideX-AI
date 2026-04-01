@@ -179,6 +179,58 @@ if uploaded_files:
     else:
         st.error("Fatigued — recovery needed")
 
+
+# ---------------- PREDICTION LAYER ----------------
+st.subheader("🔮 Tomorrow Prediction")
+
+current_atl = history["ATL"].iloc[-1]
+current_ctl = history["CTL"].iloc[-1]
+
+# Assume 1 day gap
+decay_atl = pow(0.5, 1 / 7)
+decay_ctl = pow(0.5, 1 / 42)
+
+# Scenarios
+scenarios = {
+    "Rest Day": 0,
+    "Light Ride": 30,
+    "Hard Ride": 70
+}
+
+predictions = []
+
+for name, load in scenarios.items():
+
+    next_atl = current_atl * decay_atl + load
+    next_ctl = current_ctl * decay_ctl + load
+
+    next_tsb = next_ctl - next_atl
+
+    predictions.append({
+        "Scenario": name,
+        "Predicted Fatigue (ATL)": round(next_atl, 1),
+        "Predicted Fitness (CTL)": round(next_ctl, 1),
+        "Predicted Form (TSB)": round(next_tsb, 1)
+    })
+
+pred_df = pd.DataFrame(predictions)
+
+st.dataframe(pred_df)
+
+# ---------------- DECISION ENGINE ----------------
+st.subheader("🧠 Recommendation")
+
+best_option = max(predictions, key=lambda x: x["Predicted Form (TSB)"])
+
+if best_option["Scenario"] == "Rest Day":
+    st.warning("You should rest tomorrow to recover properly.")
+
+elif best_option["Scenario"] == "Light Ride":
+    st.info("A light ride tomorrow will keep you balanced.")
+
+else:
+    st.success("You're fit enough to push a hard session tomorrow.")
+
     # ---------------- CURRENT RIDE ----------------
     st.subheader("📍 Latest Ride")
 
