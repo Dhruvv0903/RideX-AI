@@ -56,7 +56,6 @@ def parse_tcx(file):
     ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
     data = []
-
     prev_time = None
     prev_dist = None
 
@@ -72,18 +71,19 @@ def parse_tcx(file):
         curr_dist = float(dist_elem.text) if dist_elem is not None else None
 
         speed = 0
+
         if prev_time is not None and prev_dist is not None and curr_time is not None and curr_dist is not None:
             time_diff = (curr_time - prev_time).total_seconds()
             dist_diff = curr_dist - prev_dist
 
             if time_diff > 0 and dist_diff >= 0:
-    speed = (dist_diff / time_diff) * 3.6
+                speed = (dist_diff / time_diff) * 3.6
 
-    # sanity cap (cycling realistic upper bound)
-    if speed > 80:
-        speed = 0
-else:
-    speed = 0
+                # Remove unrealistic spikes
+                if speed > 80:
+                    speed = 0
+            else:
+                speed = 0
 
         data.append({
             'heart_rate': int(hr.text) if hr is not None else 0,
@@ -97,7 +97,7 @@ else:
 
     return pd.DataFrame(data)
 
-df['speed'] = df['speed'].rolling(5, min_periods=1).mean()
+
 # ---------------- NORMALIZATION ----------------
 def normalize_data(df):
     df.columns = df.columns.str.lower().str.replace('-', '_')
@@ -186,6 +186,9 @@ if uploaded_file:
         st.dataframe(df.head())
 
         df = normalize_data(df)
+
+        # Smooth speed AFTER parsing
+        df['speed'] = df['speed'].rolling(5, min_periods=1).mean()
 
         if df['heart_rate'].sum() == 0:
             st.error("No valid heart rate data found.")
