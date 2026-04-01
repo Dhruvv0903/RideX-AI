@@ -13,18 +13,16 @@ st.write("Understand how hard your ride actually was — not just distance or sp
 st.subheader("📥 How to Use")
 
 st.write("""
-Upload a CSV file with the following columns:
+Upload a CSV file exported from fitness apps like Strava, Fitbit, Garmin, or Apple Health.
 
-- heart_rate (required)
-- cadence (optional)
-- slope (optional)
-- speed (optional)
+Required:
+- heart rate data (any format)
 
-Each row should represent a moment in your ride.
+Optional:
+- cadence, speed, elevation
 """)
 
-# 🔥 NEW UX LINE (what your dad was missing)
-st.info("💡 Tip: Export your ride data from apps like Strava, Garmin, or Fitbit as CSV and upload it here.")
+st.info("💡 Tip: Different apps export different formats — RideX will automatically adapt your data.")
 
 # ---------------- SAMPLE CSV ----------------
 sample_csv = """heart_rate,cadence,slope,speed
@@ -45,6 +43,32 @@ st.download_button(
 uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
 
 
+# ---------------- NORMALIZATION FUNCTION ----------------
+def normalize_data(df):
+    df.columns = df.columns.str.lower().str.replace('-', '_')
+
+    column_map = {
+        'heart_rate': ['heart_rate', 'heartrate', 'heartratebpm', 'hr'],
+        'cadence': ['cadence', 'rpm'],
+        'speed': ['speed', 'velocity'],
+        'elevation_m': ['elevation', 'altitude', 'altitudemeters'],
+        'slope': ['slope', 'gradient']
+    }
+
+    for standard_col, variations in column_map.items():
+        for col in variations:
+            if col in df.columns:
+                df[standard_col] = df[col]
+                break
+
+    # Fill missing columns
+    for col in ['heart_rate', 'cadence', 'speed', 'slope', 'elevation_m']:
+        if col not in df.columns:
+            df[col] = 0
+
+    return df
+
+
 # ---------------- HELPERS ----------------
 def fatigue_zone(score):
     if score < 40:
@@ -61,7 +85,7 @@ def generate_insights(df):
     max_fatigue = df['fatigue_score'].max()
     avg_fatigue = df['fatigue_score'].mean()
 
-    low_cadence_pct = (df['cadence'] < 70).sum() / len(df) * 100 if 'cadence' in df else 0
+    low_cadence_pct = (df['cadence'] < 70).sum() / len(df) * 100
 
     if max_fatigue > 70:
         insights.append("⚠️ You entered high fatigue levels — recovery ride recommended.")
@@ -69,7 +93,7 @@ def generate_insights(df):
     if avg_fatigue > 50:
         insights.append("🔥 Sustained effort was high — monitor recovery tomorrow.")
 
-    if 'cadence' in df and low_cadence_pct > 30:
+    if low_cadence_pct > 30:
         insights.append(
             f"🚴 You spent {round(low_cadence_pct,1)}% of the ride below optimal cadence (<70). This increases fatigue."
         )
@@ -89,24 +113,16 @@ if uploaded_file:
     try:
         df = pd.read_csv(uploaded_file)
 
-        # Clean column names
-        df.columns = df.columns.str.lower().str.replace('-', '_')
-
         st.subheader("📄 Raw Data Preview")
         st.dataframe(df.head())
 
-        # Validate required columns
-        if 'heart_rate' not in df.columns:
-            st.error("Missing required column: heart_rate")
-            st.stop()
+        # Normalize data
+        df = normalize_data(df)
 
-        # Add missing optional columns
-        if 'cadence' not in df:
-            df['cadence'] = 0
-        if 'slope' not in df:
-            df['slope'] = 0
-        if 'elevation_m' not in df:
-            df['elevation_m'] = 0
+        # Validate core data
+        if df['heart_rate'].sum() == 0:
+            st.error("No valid heart rate data found.")
+            st.stop()
 
         # Duration approximation
         df['duration_min'] = df.index / 60
@@ -125,11 +141,10 @@ if uploaded_file:
 
         latest = df['fatigue_score'].iloc[-1]
 
-        # ---------------- CURRENT STATE ----------------
+        # ---------------- OUTPUT ----------------
         st.subheader("📍 Current State")
         st.write(f"Fatigue Level: {fatigue_zone(latest)}")
 
-        # ---------------- GRAPH ----------------
         st.subheader("📈 Fatigue Curve")
 
         fig, ax = plt.subplots(figsize=(10, 4))
@@ -138,58 +153,16 @@ if uploaded_file:
         ax.axhline(40, linestyle='--', alpha=0.7)
         ax.axhline(65, linestyle='--', alpha=0.7)
 
-        ax.set_title("Fatigue Over Time")
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Fatigue Score")
-
         st.pyplot(fig)
 
-        # ---------------- METRICS ----------------
         col1, col2, col3 = st.columns(3)
-
         col1.metric("Max Fatigue", df['fatigue_score'].max())
         col2.metric("Average Fatigue", round(df['fatigue_score'].mean(), 1))
+        col3.metric("Avg Speed", round(df['speed'].mean(), 1))
 
-        if 'speed' in df.columns:
-            col3.metric("Avg Speed", round(df['speed'].mean(), 1))
-
-        # ---------------- ZONES ----------------
-        low = (df['fatigue_score'] < 40).sum()
-        moderate = ((df['fatigue_score'] >= 40) & (df['fatigue_score'] < 65)).sum()
-        high = (df['fatigue_score'] >= 65).sum()
-
-        total = len(df)
-
-        st.subheader("⏱ Time in Zones")
-        st.write(f"🟢 Low: {round(low/total*100,1)}%")
-        st.write(f"🟡 Moderate: {round(moderate/total*100,1)}%")
-        st.write(f"🔴 High: {round(high/total*100,1)}%")
-
-        # ---------------- SUMMARY ----------------
-        st.subheader("📊 Ride Summary")
-        st.write(f"Peak Fatigue: {df['fatigue_score'].max()}")
-        st.write(f"Time in High Fatigue: {high} data points")
-
-        # ---------------- FINAL VERDICT ----------------
-        st.subheader("🏁 Final Verdict")
-
-        if latest < 40:
-            st.success("Endurance ride — you can train again tomorrow.")
-        elif latest < 65:
-            st.warning("Moderate strain — consider a light recovery ride next.")
-        else:
-            st.error("High fatigue — recovery strongly recommended.")
-
-        # ---------------- INSIGHTS ----------------
         st.subheader("🧠 Insights")
-
-        insights = generate_insights(df)
-        for insight in insights:
+        for insight in generate_insights(df):
             st.write("- " + insight)
-
-        # ---------------- KEY TAKEAWAY ----------------
-        st.subheader("💡 Key Takeaway")
-        st.write("Your fatigue was primarily influenced by intensity, cadence, and sustained effort.")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
