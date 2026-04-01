@@ -64,7 +64,7 @@ def parse_tcx(file):
     df["speed"] = df["speed"].rolling(5, min_periods=1).mean()
     return df
 
-# ---------------- LOAD ----------------
+# ---------------- MAIN ----------------
 if uploaded_file:
 
     if uploaded_file.name.endswith(".tcx"):
@@ -106,39 +106,62 @@ if uploaded_file:
 
     hist.to_csv(history_file, index=False)
 
-    # ---------------- TRAINING LOAD ----------------
-    st.subheader("📊 Training Load")
+    # ---------------- TRAINING LOAD (EXPONENTIAL) ----------------
+    st.subheader("📊 Training Load (Advanced)")
 
     hist["date"] = pd.to_datetime(hist["date"])
+    hist = hist.sort_values("date")
 
-    last7 = hist.tail(7)
-    last30 = hist.tail(30)
+    atl = []
+    ctl = []
 
-    acute = last7["avg_fatigue"].mean()
-    chronic = last30["avg_fatigue"].mean()
-    balance = chronic - acute
+    atl_value = 0
+    ctl_value = 0
+
+    for _, row in hist.iterrows():
+        load = row["avg_fatigue"]
+
+        atl_value = atl_value + (load - atl_value) * (1/7)
+        ctl_value = ctl_value + (load - ctl_value) * (1/30)
+
+        atl.append(atl_value)
+        ctl.append(ctl_value)
+
+    hist["ATL"] = atl
+    hist["CTL"] = ctl
+    hist["TSB"] = hist["CTL"] - hist["ATL"]
+
+    latest_row = hist.iloc[-1]
+
+    acute = latest_row["ATL"]
+    chronic = latest_row["CTL"]
+    balance = latest_row["TSB"]
 
     col1, col2, col3 = st.columns(3)
 
-    col1.metric("Acute Load (7d)", round(acute,1))
-    col2.metric("Chronic Load (30d)", round(chronic,1))
-    col3.metric("Balance", round(balance,1))
+    col1.metric("Fatigue (ATL)", round(acute,1))
+    col2.metric("Fitness (CTL)", round(chronic,1))
+    col3.metric("Form (TSB)", round(balance,1))
 
     # ---------------- INTERPRETATION ----------------
     st.subheader("🧠 Readiness")
 
     if balance > 10:
-        st.success("You are well recovered — push harder")
+        st.success("Fresh — ready for high intensity")
     elif balance > -5:
-        st.info("Balanced training load")
+        st.info("Balanced — maintain training")
     else:
-        st.warning("Fatigue accumulating — consider rest")
+        st.warning("Fatigued — recovery needed")
 
     # ---------------- GRAPH ----------------
-    st.subheader("📈 Load Trend")
+    st.subheader("📈 Training Load Trend")
 
     fig, ax = plt.subplots()
-    ax.plot(hist["avg_fatigue"], label="Fatigue Trend")
+
+    ax.plot(hist["ATL"], label="Fatigue (ATL)")
+    ax.plot(hist["CTL"], label="Fitness (CTL)")
+    ax.plot(hist["TSB"], label="Form (TSB)")
+
     ax.legend()
     st.pyplot(fig)
 
