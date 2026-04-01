@@ -2,12 +2,20 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
-from datetime import datetime
+import time
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RideX AI", layout="wide")
-
 st.title("🚴 RideX AI — Performance Engine")
+
+# ---------------- RIDER PROFILE ----------------
+st.sidebar.header("👤 Rider Profile")
+
+age = st.sidebar.number_input("Age", 10, 80, 18)
+resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 60)
+
+max_hr = 220 - age
+st.sidebar.write(f"Estimated Max HR: {max_hr}")
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_files = st.file_uploader(
@@ -22,11 +30,11 @@ def parse_tcx(file):
     ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
     data = []
-
     prev_time = None
     prev_dist = None
 
     for tp in root.findall('.//ns:Trackpoint', ns):
+
         time_elem = tp.find('ns:Time', ns)
         dist_elem = tp.find('ns:DistanceMeters', ns)
         hr_elem = tp.find('ns:HeartRateBpm/ns:Value', ns)
@@ -66,13 +74,17 @@ def parse_tcx(file):
     return df
 
 
-# ---------------- LOAD PER RIDE ----------------
-def compute_load(df):
+# ---------------- LOAD MODEL ----------------
+def compute_load(df, max_hr):
     avg_hr = df["heart_rate"].mean()
-    duration_hr = len(df) / 3600  # seconds → hours
+    duration_hr = len(df) / 3600
 
-    # normalized load (kept realistic)
-    load = avg_hr * duration_hr
+    if avg_hr == 0 or max_hr == 0:
+        return 0, 0, 0
+
+    intensity = avg_hr / max_hr
+
+    load = (intensity ** 2) * duration_hr * 100
 
     return load, avg_hr, df["speed"].mean()
 
@@ -92,7 +104,7 @@ if uploaded_files:
         if len(df) == 0:
             continue
 
-        load, avg_hr, avg_speed = compute_load(df)
+        load, avg_hr, avg_speed = compute_load(df, max_hr)
 
         history.append({
             "date": df["time"].iloc[0],
@@ -103,20 +115,17 @@ if uploaded_files:
 
     history = pd.DataFrame(history)
 
-    # 🔥 CRITICAL FIX: datetime conversion
+    # 🔥 critical fix
     history["date"] = pd.to_datetime(history["date"])
     history = history.sort_values("date")
 
     st.subheader(f"📁 {len(history)} ride(s) processed")
     st.dataframe(history)
 
-    # ---------------- TRAINING LOAD MODEL ----------------
-    ATL = 0
-    CTL = 0
+    # ---------------- TRAINING LOAD ----------------
+    ATL, CTL = 0, 0
 
-    atl_list = []
-    ctl_list = []
-    tsb_list = []
+    atl_list, ctl_list, tsb_list = [], [], []
 
     for i in range(len(history)):
         load = history.iloc[i]["load"]
@@ -124,17 +133,15 @@ if uploaded_files:
         if i == 0:
             days_gap = 1
         else:
-            prev_date = history.iloc[i-1]["date"]
-            curr_date = history.iloc[i]["date"]
-            days_gap = max((curr_date - prev_date).days, 1)
+            prev = history.iloc[i-1]["date"]
+            curr = history.iloc[i]["date"]
+            days_gap = max((curr - prev).days, 1)
 
-        # decay factors
         atl_decay = 0.5 ** (days_gap / 7)
         ctl_decay = 0.5 ** (days_gap / 42)
 
         ATL = ATL * atl_decay + load
         CTL = CTL * ctl_decay + load
-
         TSB = CTL - ATL
 
         atl_list.append(ATL)
@@ -145,17 +152,16 @@ if uploaded_files:
     history["CTL"] = ctl_list
     history["TSB"] = tsb_list
 
-    # ---------------- CURRENT STATE ----------------
     current_atl = history["ATL"].iloc[-1]
     current_ctl = history["CTL"].iloc[-1]
     current_tsb = history["TSB"].iloc[-1]
 
     st.subheader("📊 Training Load")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("ATL (Fatigue)", round(current_atl, 1))
-    col2.metric("CTL (Fitness)", round(current_ctl, 1))
-    col3.metric("TSB (Form)", round(current_tsb, 1))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("ATL (Fatigue)", round(current_atl, 1))
+    c2.metric("CTL (Fitness)", round(current_ctl, 1))
+    c3.metric("TSB (Form)", round(current_tsb, 1))
 
     st.info("""
 ATL = short-term fatigue  
@@ -163,7 +169,7 @@ CTL = long-term fitness
 TSB = readiness (positive = fresh, negative = fatigued)
 """)
 
-    # ---------------- PLOT ----------------
+    # ---------------- GRAPH ----------------
     st.subheader("📈 Training Load Trend")
 
     fig, ax = plt.subplots()
@@ -175,12 +181,11 @@ TSB = readiness (positive = fresh, negative = fatigued)
     ax.set_xlabel("Date")
     ax.set_ylabel("Load")
     ax.legend()
-
     plt.xticks(rotation=30)
 
     st.pyplot(fig)
 
-    # ---------------- REAL DATE AWARENESS ----------------
+    # ---------------- DATE AWARENESS ----------------
     last_date = history["date"].iloc[-1]
 
     if last_date.tzinfo is not None:
@@ -207,7 +212,7 @@ TSB = readiness (positive = fresh, negative = fatigued)
     else:
         st.error("Fatigued — recovery needed")
 
-    # ---------------- TOMORROW PREDICTION ----------------
+    # ---------------- PREDICTION ----------------
     st.subheader("🔮 Tomorrow Prediction")
 
     scenarios = {
@@ -230,8 +235,7 @@ TSB = readiness (positive = fresh, negative = fatigued)
             "TSB": round(new_tsb, 1)
         })
 
-    pred_df = pd.DataFrame(pred)
-    st.dataframe(pred_df)
+    st.dataframe(pd.DataFrame(pred))
 
     # ---------------- RECOMMENDATION ----------------
     st.subheader("🧠 Recommendation")
@@ -242,3 +246,33 @@ TSB = readiness (positive = fresh, negative = fatigued)
         st.info("Light ride recommended")
     else:
         st.success("You can push hard tomorrow")
+
+# ---------------- LIVE RIDE MODE ----------------
+st.divider()
+st.header("⚡ Live Ride Mode (Simulation)")
+
+start = st.button("Start Ride")
+
+if start:
+    placeholder = st.empty()
+
+    fatigue = 0
+
+    for i in range(50):
+        simulated_hr = 120 + (i % 30)
+
+        intensity = simulated_hr / max_hr
+        fatigue += intensity * 0.5
+
+        with placeholder.container():
+            st.write(f"HR: {simulated_hr}")
+            st.write(f"Fatigue Score: {round(fatigue,1)}")
+
+            if fatigue > 60:
+                st.error("⚠️ High fatigue — slow down")
+            elif fatigue > 40:
+                st.warning("Moderate effort")
+            else:
+                st.success("Easy pace")
+
+        time.sleep(0.2)
