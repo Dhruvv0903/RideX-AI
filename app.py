@@ -15,6 +15,11 @@ st.sidebar.title("👤 Rider Profile")
 age = st.sidebar.number_input("Age", 10, 80, 18)
 resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 70)
 
+goal = st.sidebar.selectbox(
+    "Training Goal",
+    ["Build Fitness", "Maintain", "Recover"]
+)
+
 max_hr = 220 - age
 
 # ==============================
@@ -53,9 +58,6 @@ def parse_csv(file_bytes):
     return df
 
 
-# ==============================
-# FATIGUE ENGINE (FIXED SCALING)
-# ==============================
 @st.cache_data
 def compute_fatigue(df, resting_hr, max_hr):
     fatigue = 0
@@ -64,9 +66,8 @@ def compute_fatigue(df, resting_hr, max_hr):
     for _, r in df.iterrows():
         intensity = max(0, (r["hr"] - resting_hr) / (max_hr - resting_hr))
 
-        # FIXED scaling
-        fatigue += intensity * r["delta"] * 0.08
-        fatigue -= 0.02 * r["delta"]
+        fatigue += intensity * r["delta"] * 0.03
+        fatigue -= 0.015 * r["delta"]
 
         fatigue = max(0, min(100, fatigue))
         out.append(fatigue)
@@ -100,14 +101,24 @@ def generate_sample_rides():
 
 
 # ==============================
-# ✅ FIXED 3-DAY PLANNER
+# 🚀 IMPROVED 3-DAY PLANNER
 # ==============================
-def simulate_3_day_plan(ATL, CTL):
+def simulate_3_day_plan(ATL, CTL, TSB, goal):
+
+    # HARD safety gate
+    if TSB < -10:
+        return {
+            "Day 1": "Rest",
+            "Day 2": "Light",
+            "Day 3": "Light",
+            "TSB Trend": ["Recovery Mode"]
+        }
+
     scenarios = ["Rest", "Light", "Hard"]
     loads = {"Rest": 0, "Light": 30, "Hard": 60}
 
     best_plan = None
-    best_score = -999
+    best_score = -9999
 
     for d1 in scenarios:
         for d2 in scenarios:
@@ -126,17 +137,45 @@ def simulate_3_day_plan(ATL, CTL):
 
                     tsb_list.append(tsb)
 
-                avg_tsb = np.mean(tsb_list)
                 min_tsb = min(tsb_list)
+                avg_tsb = np.mean(tsb_list)
+                variance = np.var(tsb_list)
+
+                # ❌ reject dangerous plans
+                if min_tsb < -12:
+                    continue
+
+                # 📉 trend penalty
+                trend_penalty = 0
+                for i in range(1, len(tsb_list)):
+                    if tsb_list[i] < tsb_list[i-1]:
+                        trend_penalty += 2
+
                 load_score = sum([loads[d] for d in [d1, d2, d3]])
 
-                if min_tsb < -15:
-                    score = -100
-                else:
+                # 🎯 GOAL-AWARE WEIGHTING
+                if goal == "Build Fitness":
                     score = (
-                        avg_tsb * 0.6 +
-                        load_score * 0.3 -
-                        np.var(tsb_list) * 0.1
+                        avg_tsb * 0.5 +
+                        load_score * 0.4 -
+                        trend_penalty * 2 -
+                        variance * 0.2
+                    )
+
+                elif goal == "Recover":
+                    score = (
+                        avg_tsb * 0.9 -
+                        load_score * 0.2 -
+                        trend_penalty * 3 -
+                        variance * 0.2
+                    )
+
+                else:  # Maintain
+                    score = (
+                        avg_tsb * 0.7 +
+                        load_score * 0.2 -
+                        trend_penalty * 2 -
+                        variance * 0.2
                     )
 
                 if score > best_score:
@@ -145,7 +184,7 @@ def simulate_3_day_plan(ATL, CTL):
                         "Day 1": d1,
                         "Day 2": d2,
                         "Day 3": d3,
-                        "TSB Trend": [float(round(x, 1)) for x in tsb_list]
+                        "TSB Trend": [round(x, 1) for x in tsb_list]
                     }
 
     return best_plan
@@ -161,9 +200,6 @@ mode = st.radio("Mode", ["Upload Files", "Sample Data"])
 history = []
 all_hr = []
 
-# ==============================
-# LOAD DATA
-# ==============================
 if mode == "Upload Files":
     files = st.file_uploader("Upload TCX/CSV", type=["tcx", "csv"], accept_multiple_files=True)
 
@@ -181,7 +217,6 @@ if mode == "Upload Files":
                     "load": df["fatigue"].mean(),
                     "avg_hr": df["hr"].mean()
                 })
-
 else:
     rides = generate_sample_rides()
 
@@ -232,12 +267,6 @@ if history:
     c2.metric("CTL", f"{CTL:.1f}")
     c3.metric("TSB", f"{TSB:.1f}")
 
-    st.info("""
-    ATL = Acute Training Load  
-    CTL = Chronic Training Load  
-    TSB = Training Stress Balance  
-    """)
-
     # ==============================
     # DAYS SINCE LAST RIDE
     # ==============================
@@ -275,56 +304,11 @@ if history:
     st.pyplot(fig)
 
     # ==============================
-    # 🔮 TOMORROW
-    # ==============================
-    st.subheader("🔮 Tomorrow Prediction")
-
-    scenarios = ["Rest", "Light", "Hard"]
-    loads = [0, 30, 60]
-    rows = []
-
-    for i in range(3):
-        load = loads[i]
-
-        atl_n = ATL + (load - ATL) / 7
-        ctl_n = CTL + (load - CTL) / 42
-        tsb_n = ctl_n - atl_n
-
-        rows.append({
-            "Scenario": scenarios[i],
-            "ATL": round(atl_n, 1),
-            "CTL": round(ctl_n, 1),
-            "TSB": round(tsb_n, 1)
-        })
-
-    pred_df = pd.DataFrame(rows)
-    st.dataframe(pred_df)
-
-    best = pred_df.loc[pred_df["TSB"].idxmax()]["Scenario"]
-
-    if gap > 5:
-        final = "Light"
-    else:
-        final = best
-
-    if TSB < -10:
-        final = "Rest"
-
-    st.subheader("🧠 Tomorrow Recommendation")
-
-    if final == "Rest":
-        st.warning("🛑 Rest Day")
-    elif final == "Light":
-        st.info("🚴 Light Ride")
-    else:
-        st.success("🔥 Hard Day")
-
-    # ==============================
     # 🚀 3-DAY PLAN
     # ==============================
     st.subheader("🚀 3-Day Training Plan")
 
-    plan = simulate_3_day_plan(ATL, CTL)
+    plan = simulate_3_day_plan(ATL, CTL, TSB, goal)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Day 1", plan["Day 1"])
@@ -332,59 +316,3 @@ if history:
     c3.metric("Day 3", plan["Day 3"])
 
     st.write(f"TSB Trend: {plan['TSB Trend']}")
-
-
-# ==============================
-# LIVE MODE (FIXED LOGIC)
-# ==============================
-st.subheader("⚡ Live Ride Mode")
-
-live_mode = st.radio("Live Source", ["Upload", "Sample"])
-
-if live_mode == "Upload":
-    lf = st.file_uploader("Upload file", type=["tcx", "csv"], key="live")
-
-    if lf:
-        b = lf.read()
-        df_live = parse_tcx(b) if lf.name.endswith(".tcx") else parse_csv(b)
-else:
-    df_live = generate_sample_rides()[0]
-
-if "df_live" in locals() and not df_live.empty:
-    df_live = compute_fatigue(df_live, resting_hr, max_hr)
-
-    if st.button("▶ Start Simulation"):
-
-        placeholder = st.empty()
-        smoothed_hr = None
-
-        for i in range(0, len(df_live), 6):
-
-            row = df_live.iloc[i]
-            hr = row["hr"]
-            fatigue = row["fatigue"]
-
-            smoothed_hr = hr if smoothed_hr is None else 0.85 * smoothed_hr + 0.15 * hr
-
-            # ✅ FIXED PRIORITY
-            if fatigue > 90:
-                decision = "🛑 STOP — exhaustion"
-            elif fatigue > 75:
-                decision = "⚠️ Reduce effort"
-            else:
-                if smoothed_hr < zone_low:
-                    decision = "🔥 Push more"
-                elif zone_low <= smoothed_hr <= zone_high:
-                    decision = "✅ Perfect pacing"
-                elif smoothed_hr <= zone_high + 10:
-                    decision = "⚖️ Strong effort"
-                else:
-                    decision = "🚨 Too intense"
-
-            with placeholder.container():
-                st.metric("Heart Rate", f"{int(smoothed_hr)} bpm")
-                st.metric("Fatigue", f"{int(fatigue)} / 100")
-                st.info(f"Adaptive Zone: {int(zone_low)} - {int(zone_high)} bpm")
-                st.success(decision)
-
-            time.sleep(0.08)
