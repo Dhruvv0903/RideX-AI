@@ -2,12 +2,23 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import time
+import matplotlib.pyplot as plt
 
 from fatigue_model import compute_fatigue
-from strava_api import get_auth_url, exchange_code_for_token, get_activities
+from strava_api import (
+    get_auth_url,
+    exchange_code_for_token,
+    get_activities,
+    refresh_access_token
+)
 from data_loader import load_from_device
 
 st.set_page_config(layout="wide")
+
+# ==============================
+# TITLE (RESTORED)
+# ==============================
+st.title("🚴 RideX AI — Performance Engine")
 
 # ==============================
 # PROFILE
@@ -30,49 +41,63 @@ max_hr = 220 - age
 st.sidebar.subheader("🔗 Connect")
 
 if st.sidebar.button("Connect Strava"):
-    st.markdown(f"[Click here to authorize]({get_auth_url()})")
+    st.markdown(f"[Authorize Strava]({get_auth_url()})")
 
+# AUTO READ CODE FROM URL
 query_params = st.query_params
 code = query_params.get("code", None)
 
-history = []
-all_hr = []
-
 # ==============================
-# LOAD FROM STRAVA
+# TOKEN HANDLING
 # ==============================
-if code:
+if code and "access_token" not in st.session_state:
     token_data = exchange_code_for_token(code)
 
-    # 🔴 DEBUG (DO NOT REMOVE YET)
-    st.write(token_data)
+    st.write(token_data)  # debug (remove later)
 
     if "access_token" in token_data:
         st.session_state["access_token"] = token_data["access_token"]
         st.session_state["refresh_token"] = token_data["refresh_token"]
         st.session_state["expires_at"] = token_data["expires_at"]
-        activities = get_activities(access_token)
-
-        for act in activities[:5]:
-            if act["type"] != "Ride":
-                continue
-
-            hr = act.get("average_heartrate", 120)
-
-            history.append({
-                "date": pd.to_datetime(act["start_date"]),
-                "load": hr * 0.6,
-                "avg_hr": hr
-            })
-
-            all_hr.append(hr)
-
     else:
         st.error("❌ Strava connection failed")
 
+# REFRESH TOKEN IF EXPIRED
+if "access_token" in st.session_state:
+    if time.time() > st.session_state["expires_at"]:
+        new_tokens = refresh_access_token(st.session_state["refresh_token"])
+
+        st.session_state["access_token"] = new_tokens["access_token"]
+        st.session_state["refresh_token"] = new_tokens["refresh_token"]
+        st.session_state["expires_at"] = new_tokens["expires_at"]
+
 # ==============================
-# FALLBACK SAMPLE DATA
+# LOAD DATA
 # ==============================
+history = []
+all_hr = []
+
+if "access_token" in st.session_state:
+    activities = get_activities(st.session_state["access_token"])
+
+    for act in activities[:5]:
+        if act.get("type") != "Ride":
+            continue
+
+        hr = act.get("average_heartrate", None)
+
+        if hr is None:
+            continue
+
+        history.append({
+            "date": pd.to_datetime(act["start_date"]),
+            "load": hr * 0.6,
+            "avg_hr": hr
+        })
+
+        all_hr.append(hr)
+
+# FALLBACK
 if not history:
     st.warning("Using sample data")
 
@@ -96,13 +121,16 @@ zone_low = s.mean() - 0.5 * s.std()
 zone_high = s.mean() + 0.5 * s.std()
 
 # ==============================
-# HISTORY + LOAD
+# HISTORY
 # ==============================
 history_df = pd.DataFrame(history).sort_values("date")
 
 st.subheader("📂 Ride History")
 st.dataframe(history_df)
 
+# ==============================
+# LOAD METRICS
+# ==============================
 history_df["ATL"] = history_df["load"].ewm(span=7).mean()
 history_df["CTL"] = history_df["load"].ewm(span=42).mean()
 history_df["TSB"] = history_df["CTL"] - history_df["ATL"]
@@ -121,6 +149,20 @@ ATL = Acute Training Load (short-term fatigue)
 CTL = Chronic Training Load (long-term fitness)  
 TSB = Training Stress Balance (readiness)
 """)
+
+# ==============================
+# GRAPH (RESTORED)
+# ==============================
+fig, ax = plt.subplots()
+
+ax.plot(history_df["date"], history_df["ATL"], label="ATL")
+ax.plot(history_df["date"], history_df["CTL"], label="CTL")
+ax.plot(history_df["date"], history_df["TSB"], label="TSB")
+
+ax.legend()
+ax.set_title("Training Load Trends")
+
+st.pyplot(fig)
 
 # ==============================
 # DAYS SINCE LAST RIDE
@@ -147,79 +189,25 @@ st.subheader("🧠 Readiness")
 st.success(readiness)
 
 # ==============================
-# TOMORROW PREDICTION
-# ==============================
-st.subheader("🔮 Tomorrow Prediction")
-
-scenarios = ["Rest", "Light", "Hard"]
-loads = [0, 30, 60]
-rows = []
-
-for i in range(3):
-    load = loads[i]
-
-    atl_n = ATL + (load - ATL) / 7
-    ctl_n = CTL + (load - CTL) / 42
-    tsb_n = ctl_n - atl_n
-
-    rows.append({
-        "Scenario": scenarios[i],
-        "ATL": round(atl_n, 1),
-        "CTL": round(ctl_n, 1),
-        "TSB": round(tsb_n, 1)
-    })
-
-pred_df = pd.DataFrame(rows)
-st.dataframe(pred_df)
-
-best = pred_df.loc[pred_df["TSB"].idxmax()]["Scenario"]
-
-if gap > 5:
-    final = "Light"
-else:
-    final = best
-
-if TSB < -10:
-    final = "Rest"
-
-st.subheader("🧠 Tomorrow Recommendation")
-
-if final == "Rest":
-    st.warning("🛑 Rest Day Recommended")
-elif final == "Light":
-    st.info("🚴 Light Ride Recommended")
-else:
-    st.success("🔥 Hard Training Day Recommended")
-
-# ==============================
-# 3 DAY PLAN
-# ==============================
-st.subheader("🚀 3-Day Training Plan")
-
-plan = ["Rest", "Light", "Hard"]
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Day 1", plan[0])
-c2.metric("Day 2", plan[1])
-c3.metric("Day 3", plan[2])
-
-# ==============================
-# ⚡ LIVE MODE (FIXED)
+# LIVE MODE (FIXED)
 # ==============================
 st.subheader("⚡ Live Ride Mode")
+
+df_live = None
 
 live_mode = st.radio("Live Source", ["Upload", "Sample"])
 
 if live_mode == "Upload":
-    lf = st.file_uploader("Upload file", type=["tcx", "csv"], key="live")
+    lf = st.file_uploader("Upload file", type=["tcx", "csv"])
 
-    if lf:
+    if lf is not None:
         df_live = load_from_device()
+
 else:
     df_live = load_from_device()
 
 # ==============================
-# RUN SIMULATION
+# SIMULATION
 # ==============================
 if df_live is not None and not df_live.empty:
 
