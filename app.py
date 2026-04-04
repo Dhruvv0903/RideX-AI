@@ -272,7 +272,118 @@ else:
 
 st.subheader("🧠 Readiness")
 st.success(readiness)
+# ==============================
+# 🔮 TOMORROW PREDICTION (RESTORED)
+# ==============================
+st.subheader("🔮 Tomorrow Prediction")
 
+scenarios = ["Rest", "Light", "Hard"]
+loads = [0, 30, 60]
+rows = []
+
+for i in range(3):
+    load = loads[i]
+
+    atl_n = ATL + (load - ATL) / 7
+    ctl_n = CTL + (load - CTL) / 42
+    tsb_n = ctl_n - atl_n
+
+    rows.append({
+        "Scenario": scenarios[i],
+        "ATL": round(atl_n, 1),
+        "CTL": round(ctl_n, 1),
+        "TSB": round(tsb_n, 1)
+    })
+
+pred_df = pd.DataFrame(rows)
+st.dataframe(pred_df)
+
+# ==============================
+# 🧠 DECISION ENGINE (RESTORED)
+# ==============================
+best_row = pred_df.loc[pred_df["TSB"].idxmax()]
+best = best_row["Scenario"]
+
+# gap correction
+if gap > 5:
+    final = "Light"
+else:
+    final = best
+
+# fatigue override
+if TSB < -10:
+    final = "Rest"
+
+# ==============================
+# FINAL OUTPUT
+# ==============================
+st.subheader("🧠 Tomorrow Recommendation")
+
+if final == "Rest":
+    st.warning("🛑 Rest Day Recommended")
+elif final == "Light":
+    st.info("🚴 Light Ride Recommended")
+else:
+    st.success("🔥 Hard Training Day Recommended")
+
+
+# ==============================
+# 🚀 3-DAY PLAN (RESTORED)
+# ==============================
+st.subheader("🚀 3-Day Training Plan")
+
+def simulate_3_day_plan(ATL, CTL):
+    scenarios = ["Rest", "Light", "Hard"]
+    loads = {"Rest": 0, "Light": 30, "Hard": 60}
+
+    best_plan = None
+    best_score = -999
+
+    for d1 in scenarios:
+        for d2 in scenarios:
+            for d3 in scenarios:
+
+                atl = ATL
+                ctl = CTL
+                tsb_list = []
+
+                for d in [d1, d2, d3]:
+                    load = loads[d]
+
+                    atl = atl + (load - atl) / 7
+                    ctl = ctl + (load - ctl) / 42
+                    tsb = ctl - atl
+
+                    tsb_list.append(tsb)
+
+                min_tsb = min(tsb_list)
+                variance = np.var(tsb_list)
+
+                if min_tsb < -15:
+                    score = -100
+                else:
+                    score = min_tsb - variance
+
+                if score > best_score:
+                    best_score = score
+                    best_plan = {
+                        "Day 1": d1,
+                        "Day 2": d2,
+                        "Day 3": d3,
+                        "TSB Trend": [round(x, 1) for x in tsb_list]
+                    }
+
+    return best_plan
+
+
+plan = simulate_3_day_plan(ATL, CTL)
+
+c1, c2, c3 = st.columns(3)
+c1.metric("Day 1", plan["Day 1"])
+c2.metric("Day 2", plan["Day 2"])
+c3.metric("Day 3", plan["Day 3"])
+
+st.write(f"TSB Trend: {plan['TSB Trend']}")
 # ==============================
 # LIVE MODE (UNCHANGED)
 # ==============================
