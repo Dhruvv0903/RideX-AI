@@ -5,7 +5,7 @@ import time
 
 from fatigue_model import compute_fatigue
 from strava_api import get_auth_url, exchange_code_for_token, get_activities
-from hr_stream import load_from_device
+from data_loader import load_from_device
 
 st.set_page_config(layout="wide")
 
