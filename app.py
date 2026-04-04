@@ -96,6 +96,53 @@ def generate_sample_rides():
 
 
 # ==============================
+# 🚀 3-DAY SIMULATION
+# ==============================
+def simulate_3_day_plan(ATL, CTL):
+    scenarios = ["Rest", "Light", "Hard"]
+    loads = {"Rest": 0, "Light": 30, "Hard": 60}
+
+    best_plan = None
+    best_score = -999
+
+    for d1 in scenarios:
+        for d2 in scenarios:
+            for d3 in scenarios:
+
+                atl = ATL
+                ctl = CTL
+                tsb_list = []
+
+                for d in [d1, d2, d3]:
+                    load = loads[d]
+
+                    atl = atl + (load - atl) / 7
+                    ctl = ctl + (load - ctl) / 42
+                    tsb = ctl - atl
+
+                    tsb_list.append(tsb)
+
+                min_tsb = min(tsb_list)
+                variance = np.var(tsb_list)
+
+                if min_tsb < -15:
+                    score = -100
+                else:
+                    score = min_tsb - 0.5 * variance  # improved scoring
+
+                if score > best_score:
+                    best_score = score
+                    best_plan = {
+                        "Day 1": d1,
+                        "Day 2": d2,
+                        "Day 3": d3,
+                        "TSB Trend": [round(x, 1) for x in tsb_list]
+                    }
+
+    return best_plan
+
+
+# ==============================
 # MAIN
 # ==============================
 st.title("🚴 RideX AI — Performance Engine")
@@ -182,18 +229,14 @@ if history:
     TSB = Training Stress Balance (readiness)
     """)
 
-    # ==============================
-    # DAYS SINCE LAST RIDE
-    # ==============================
+    # DAYS SINCE LAST
     last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
     today = pd.Timestamp.now().tz_localize(None)
     gap = (today - last_date).days
 
     st.write(f"📅 Days since last ride: {gap}")
 
-    # ==============================
     # READINESS
-    # ==============================
     if gap > 7:
         readiness = "Fresh — recovered"
     elif TSB > 10:
@@ -206,9 +249,7 @@ if history:
     st.subheader("🧠 Readiness")
     st.success(readiness)
 
-    # ==============================
     # GRAPH
-    # ==============================
     fig, ax = plt.subplots()
     ax.plot(history_df["date"], history_df["ATL"], label="ATL")
     ax.plot(history_df["date"], history_df["CTL"], label="CTL")
@@ -219,7 +260,7 @@ if history:
     st.pyplot(fig)
 
     # ==============================
-    # 🔮 TOMORROW PREDICTION (FULL)
+    # TOMORROW PREDICTION
     # ==============================
     st.subheader("🔮 Tomorrow Prediction")
 
@@ -244,25 +285,19 @@ if history:
     pred_df = pd.DataFrame(rows)
     st.dataframe(pred_df)
 
-    # ==============================
-    # 🧠 DECISION ENGINE (CORRECT)
-    # ==============================
+    # DECISION ENGINE
     best_row = pred_df.loc[pred_df["TSB"].idxmax()]
     best = best_row["Scenario"]
 
-    # gap correction
     if gap > 5:
         final = "Light"
     else:
         final = best
 
-    # fatigue override
     if TSB < -10:
         final = "Rest"
 
-    # ==============================
     # FINAL OUTPUT
-    # ==============================
     st.subheader("🧠 Tomorrow Recommendation")
 
     if final == "Rest":
@@ -271,6 +306,20 @@ if history:
         st.info("🚴 Light Ride Recommended")
     else:
         st.success("🔥 Hard Training Day Recommended")
+
+    # ==============================
+    # 🚀 3-DAY PLAN
+    # ==============================
+    st.subheader("🚀 3-Day Training Plan")
+
+    plan = simulate_3_day_plan(ATL, CTL)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Day 1", plan["Day 1"])
+    c2.metric("Day 2", plan["Day 2"])
+    c3.metric("Day 3", plan["Day 3"])
+
+    st.write(f"TSB Trend: {plan['TSB Trend']}")
 
 
 # ==============================
