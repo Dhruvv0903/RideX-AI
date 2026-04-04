@@ -1,3 +1,8 @@
+import pandas as pd
+
+# ==============================
+# EXISTING FUNCTION (KEEP)
+# ==============================
 def calculate_fatigue(hr, cadence, slope, duration_min, elevation_m):
     hr_factor       = min(hr / 195, 1.0)
     slope_factor    = min(max(slope, 0) / 15, 1.0)
@@ -16,6 +21,30 @@ def calculate_fatigue(hr, cadence, slope, duration_min, elevation_m):
     return round(min(fatigue, 100), 1)
 
 
+# ==============================
+# 🔥 NEW FUNCTION (REQUIRED BY APP)
+# ==============================
+def compute_fatigue(df, resting_hr, max_hr):
+    fatigue = 0
+    out = []
+
+    for _, r in df.iterrows():
+        intensity = max(0, (r["hr"] - resting_hr) / (max_hr - resting_hr))
+
+        fatigue += intensity * r["delta"] * 0.03
+        fatigue -= 0.015 * r["delta"]
+
+        fatigue = max(0, min(100, fatigue))
+        out.append(fatigue)
+
+    df = df.copy()
+    df["fatigue"] = out
+    return df
+
+
+# ==============================
+# EXISTING INSIGHTS (KEEP)
+# ==============================
 def generate_insights(df):
     insights = []
 
