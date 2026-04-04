@@ -1,5 +1,3 @@
-import webbrowser
-import time
 import requests
 
 CLIENT_ID = "220471"
@@ -41,7 +39,7 @@ def refresh_access_token(refresh_token):
     url = "https://www.strava.com/oauth/token"
 
     data = {
-        "client_id": CLIENT_ID,
+        "client_id": CLIENT_ID,   # keep consistent type (string)
         "client_secret": CLIENT_SECRET,
         "grant_type": "refresh_token",
         "refresh_token": refresh_token
