@@ -2,9 +2,9 @@ import requests
 import webbrowser
 import time
 
-CLIENT_ID = "YOUR_CLIENT_ID"
-CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-REDIRECT_URI = "http://localhost:8501"
+CLIENT_ID = "220471"
+CLIENT_SECRET = "755c40c43a36c92ce4c207cfcf6f8724bb171003"
+REDIRECT_URI = "https://ridex-ai.streamlit.app/"
 
 def get_auth_url():
     return f"https://www.strava.com/oauth/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={REDIRECT_URI}&approval_prompt=auto&scope=activity:read_all"
