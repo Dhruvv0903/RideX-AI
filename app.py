@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
+import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
+import time
 
 from fatigue_model import compute_fatigue
 from strava_api import (
@@ -31,6 +32,43 @@ resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 70)
 max_hr = 220 - age
 
 # ==============================
+# TCX PARSER (RESTORED)
+# ==============================
+@st.cache_data
+def parse_tcx(file_bytes):
+    root = ET.fromstring(file_bytes)
+    ns = {"ns": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
+
+    data = []
+    for tp in root.findall(".//ns:Trackpoint", ns):
+        t = tp.find("ns:Time", ns)
+        hr = tp.find(".//ns:HeartRateBpm/ns:Value", ns)
+
+        if t is not None and hr is not None:
+            data.append({
+                "time": pd.to_datetime(t.text),
+                "hr": float(hr.text)
+            })
+
+    df = pd.DataFrame(data)
+
+    if not df.empty:
+        df["delta"] = df["time"].diff().dt.total_seconds().fillna(1)
+
+    return df
+
+# ==============================
+# CSV PARSER (RESTORED)
+# ==============================
+@st.cache_data
+def parse_csv(file_bytes):
+    from io import StringIO
+    df = pd.read_csv(StringIO(file_bytes.decode()))
+    df["time"] = pd.to_datetime(df["time"])
+    df["delta"] = df["time"].diff().dt.total_seconds().fillna(1)
+    return df
+
+# ==============================
 # STRAVA CONNECT
 # ==============================
 st.sidebar.subheader("🔗 Connect")
@@ -38,9 +76,6 @@ st.sidebar.subheader("🔗 Connect")
 if st.sidebar.button("Connect Strava"):
     st.markdown(f"[Authorize Strava]({get_auth_url()})")
 
-# ==============================
-# HANDLE AUTH CODE (FIXED LOOP)
-# ==============================
 query_params = st.query_params
 code = query_params.get("code", None)
 
@@ -52,9 +87,7 @@ if code and "access_token" not in st.session_state:
         st.session_state["refresh_token"] = token_data["refresh_token"]
         st.session_state["expires_at"] = token_data["expires_at"]
 
-        # 🔥 CRITICAL FIX — removes infinite loop
         st.query_params.clear()
-
         st.success("✅ Strava Connected")
 
     else:
@@ -62,7 +95,7 @@ if code and "access_token" not in st.session_state:
         st.write(token_data)
 
 # ==============================
-# AUTO REFRESH TOKEN
+# TOKEN REFRESH
 # ==============================
 if "access_token" in st.session_state:
     if time.time() > st.session_state["expires_at"]:
@@ -73,39 +106,43 @@ if "access_token" in st.session_state:
         st.session_state["expires_at"] = new_tokens["expires_at"]
 
 # ==============================
-# 📥 UPLOAD DATA (RESTORED)
+# 📥 UPLOAD FILES (RESTORED)
 # ==============================
 st.subheader("📥 Upload Ride Files")
 
 uploaded_files = st.file_uploader(
-    "Upload TCX/CSV files",
+    "Upload TCX/CSV",
     type=["tcx", "csv"],
     accept_multiple_files=True
 )
 
-# ==============================
-# LOAD DATA (PRIORITY SYSTEM)
-# ==============================
 history = []
 all_hr = []
 
-# 🔥 PRIORITY 1: UPLOAD
+# ==============================
+# DATA PIPELINE
+# ==============================
+
+# 🔵 1. FILE PIPELINE (PRIMARY)
 if uploaded_files:
 
-    for file in uploaded_files:
-        df = load_from_device()  # placeholder for now
+    for f in uploaded_files:
+        b = f.read()
 
-        avg_hr = df["hr"].mean()
+        df = parse_tcx(b) if f.name.endswith(".tcx") else parse_csv(b)
 
-        history.append({
-            "date": pd.Timestamp.now(),
-            "load": avg_hr * 0.6,
-            "avg_hr": avg_hr
-        })
+        if not df.empty:
+            df = compute_fatigue(df, resting_hr, max_hr)
 
-        all_hr.extend(df["hr"].tolist())
+            all_hr.extend(df["hr"])
 
-# 🔥 PRIORITY 2: STRAVA
+            history.append({
+                "date": df["time"].iloc[-1],
+                "load": df["fatigue"].mean(),
+                "avg_hr": df["hr"].mean()
+            })
+
+# 🟢 2. STRAVA PIPELINE
 elif "access_token" in st.session_state:
 
     activities = get_activities(st.session_state["access_token"])
@@ -127,7 +164,7 @@ elif "access_token" in st.session_state:
 
         all_hr.append(hr)
 
-# 🔥 PRIORITY 3: SAMPLE
+# 🟡 3. SAMPLE FALLBACK
 if not history:
     st.warning("Using sample data")
 
@@ -174,12 +211,6 @@ c1.metric("ATL", f"{ATL:.1f}")
 c2.metric("CTL", f"{CTL:.1f}")
 c3.metric("TSB", f"{TSB:.1f}")
 
-st.info("""
-ATL = Acute Training Load (short-term fatigue)  
-CTL = Chronic Training Load (long-term fitness)  
-TSB = Training Stress Balance (readiness)
-""")
-
 # ==============================
 # GRAPH (RESTORED)
 # ==============================
@@ -190,8 +221,6 @@ ax.plot(history_df["date"], history_df["CTL"], label="CTL")
 ax.plot(history_df["date"], history_df["TSB"], label="TSB")
 
 ax.legend()
-ax.set_title("Training Load Trends")
-
 st.pyplot(fig)
 
 # ==============================
@@ -219,7 +248,7 @@ st.subheader("🧠 Readiness")
 st.success(readiness)
 
 # ==============================
-# LIVE MODE (FIXED)
+# LIVE MODE (UNCHANGED)
 # ==============================
 st.subheader("⚡ Live Ride Mode")
 
@@ -232,7 +261,6 @@ if live_mode == "Upload":
 
     if lf is not None:
         df_live = load_from_device()
-
 else:
     df_live = load_from_device()
 
