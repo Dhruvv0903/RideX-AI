@@ -53,6 +53,9 @@ def parse_csv(file_bytes):
     return df
 
 
+# ==============================
+# FATIGUE ENGINE (FIXED SCALING)
+# ==============================
 @st.cache_data
 def compute_fatigue(df, resting_hr, max_hr):
     fatigue = 0
@@ -61,8 +64,9 @@ def compute_fatigue(df, resting_hr, max_hr):
     for _, r in df.iterrows():
         intensity = max(0, (r["hr"] - resting_hr) / (max_hr - resting_hr))
 
-        fatigue += intensity * r["delta"] * 0.03
-        fatigue -= 0.015 * r["delta"]
+        # FIXED scaling
+        fatigue += intensity * r["delta"] * 0.08
+        fatigue -= 0.02 * r["delta"]
 
         fatigue = max(0, min(100, fatigue))
         out.append(fatigue)
@@ -96,7 +100,7 @@ def generate_sample_rides():
 
 
 # ==============================
-# 🚀 3-DAY SIMULATION
+# ✅ FIXED 3-DAY PLANNER
 # ==============================
 def simulate_3_day_plan(ATL, CTL):
     scenarios = ["Rest", "Light", "Hard"]
@@ -122,13 +126,18 @@ def simulate_3_day_plan(ATL, CTL):
 
                     tsb_list.append(tsb)
 
+                avg_tsb = np.mean(tsb_list)
                 min_tsb = min(tsb_list)
-                variance = np.var(tsb_list)
+                load_score = sum([loads[d] for d in [d1, d2, d3]])
 
                 if min_tsb < -15:
                     score = -100
                 else:
-                    score = min_tsb - 0.5 * variance  # improved scoring
+                    score = (
+                        avg_tsb * 0.6 +
+                        load_score * 0.3 -
+                        np.var(tsb_list) * 0.1
+                    )
 
                 if score > best_score:
                     best_score = score
@@ -136,7 +145,7 @@ def simulate_3_day_plan(ATL, CTL):
                         "Day 1": d1,
                         "Day 2": d2,
                         "Day 3": d3,
-                        "TSB Trend": [round(x, 1) for x in tsb_list]
+                        "TSB Trend": [float(round(x, 1)) for x in tsb_list]
                     }
 
     return best_plan
@@ -224,19 +233,23 @@ if history:
     c3.metric("TSB", f"{TSB:.1f}")
 
     st.info("""
-    ATL = Acute Training Load (short-term fatigue)  
-    CTL = Chronic Training Load (long-term fitness)  
-    TSB = Training Stress Balance (readiness)
+    ATL = Acute Training Load  
+    CTL = Chronic Training Load  
+    TSB = Training Stress Balance  
     """)
 
-    # DAYS SINCE LAST
+    # ==============================
+    # DAYS SINCE LAST RIDE
+    # ==============================
     last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
     today = pd.Timestamp.now().tz_localize(None)
     gap = (today - last_date).days
 
     st.write(f"📅 Days since last ride: {gap}")
 
+    # ==============================
     # READINESS
+    # ==============================
     if gap > 7:
         readiness = "Fresh — recovered"
     elif TSB > 10:
@@ -249,7 +262,9 @@ if history:
     st.subheader("🧠 Readiness")
     st.success(readiness)
 
+    # ==============================
     # GRAPH
+    # ==============================
     fig, ax = plt.subplots()
     ax.plot(history_df["date"], history_df["ATL"], label="ATL")
     ax.plot(history_df["date"], history_df["CTL"], label="CTL")
@@ -260,7 +275,7 @@ if history:
     st.pyplot(fig)
 
     # ==============================
-    # TOMORROW PREDICTION
+    # 🔮 TOMORROW
     # ==============================
     st.subheader("🔮 Tomorrow Prediction")
 
@@ -285,9 +300,7 @@ if history:
     pred_df = pd.DataFrame(rows)
     st.dataframe(pred_df)
 
-    # DECISION ENGINE
-    best_row = pred_df.loc[pred_df["TSB"].idxmax()]
-    best = best_row["Scenario"]
+    best = pred_df.loc[pred_df["TSB"].idxmax()]["Scenario"]
 
     if gap > 5:
         final = "Light"
@@ -297,15 +310,14 @@ if history:
     if TSB < -10:
         final = "Rest"
 
-    # FINAL OUTPUT
     st.subheader("🧠 Tomorrow Recommendation")
 
     if final == "Rest":
-        st.warning("🛑 Rest Day Recommended")
+        st.warning("🛑 Rest Day")
     elif final == "Light":
-        st.info("🚴 Light Ride Recommended")
+        st.info("🚴 Light Ride")
     else:
-        st.success("🔥 Hard Training Day Recommended")
+        st.success("🔥 Hard Day")
 
     # ==============================
     # 🚀 3-DAY PLAN
@@ -323,7 +335,7 @@ if history:
 
 
 # ==============================
-# LIVE MODE
+# LIVE MODE (FIXED LOGIC)
 # ==============================
 st.subheader("⚡ Live Ride Mode")
 
@@ -354,19 +366,20 @@ if "df_live" in locals() and not df_live.empty:
 
             smoothed_hr = hr if smoothed_hr is None else 0.85 * smoothed_hr + 0.15 * hr
 
-            if smoothed_hr < zone_low:
-                decision = "🔥 Push more"
-            elif zone_low <= smoothed_hr <= zone_high:
-                decision = "✅ Perfect pacing"
-            elif smoothed_hr <= zone_high + 10:
-                decision = "⚖️ Strong effort"
-            else:
-                decision = "🚨 Too intense"
-
-            if fatigue > 85:
-                decision = "🛑 STOP"
-            elif fatigue > 70:
+            # ✅ FIXED PRIORITY
+            if fatigue > 90:
+                decision = "🛑 STOP — exhaustion"
+            elif fatigue > 75:
                 decision = "⚠️ Reduce effort"
+            else:
+                if smoothed_hr < zone_low:
+                    decision = "🔥 Push more"
+                elif zone_low <= smoothed_hr <= zone_high:
+                    decision = "✅ Perfect pacing"
+                elif smoothed_hr <= zone_high + 10:
+                    decision = "⚖️ Strong effort"
+                else:
+                    decision = "🚨 Too intense"
 
             with placeholder.container():
                 st.metric("Heart Rate", f"{int(smoothed_hr)} bpm")
