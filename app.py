@@ -48,7 +48,9 @@ if code:
     st.write(token_data)
 
     if "access_token" in token_data:
-        access_token = token_data["access_token"]
+        st.session_state["access_token"] = token_data["access_token"]
+        st.session_state["refresh_token"] = token_data["refresh_token"]
+        st.session_state["expires_at"] = token_data["expires_at"]
         activities = get_activities(access_token)
 
         for act in activities[:5]:
