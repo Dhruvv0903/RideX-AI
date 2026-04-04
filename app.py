@@ -32,7 +32,8 @@ st.sidebar.subheader("🔗 Connect")
 if st.sidebar.button("Connect Strava"):
     st.markdown(f"[Click here to authorize]({get_auth_url()})")
 
-code = st.sidebar.text_input("Paste Strava Code")
+query_params = st.query_params
+code = query_params.get("code", None)
 
 history = []
 all_hr = []
