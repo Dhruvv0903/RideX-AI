@@ -4,7 +4,8 @@ import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-
+from strava_api import get_auth_url, exchange_code_for_token
+from data_loader import load_from_strava
 st.set_page_config(layout="wide")
 
 # ==============================
