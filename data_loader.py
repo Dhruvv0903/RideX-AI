@@ -1,44 +1,46 @@
 import pandas as pd
 import numpy as np
 from strava_api import get_activities
-import pandas as pd
-import numpy as np
 
+# ==============================
+# STRAVA LOADER
+# ==============================
 def load_from_strava(access_token):
     activities = get_activities(access_token)
 
-    if not activities:
+    if not activities or isinstance(activities, dict):
         return None
 
     data = []
 
-    for act in activities[:5]:  # last 5 rides
-        if act["type"] != "Ride":
+    for act in activities[:10]:  # last 10 activities
+        if act.get("type") != "Ride":
             continue
 
-        hr = act.get("average_heartrate", 120)
+        hr = act.get("average_heartrate", None)
+
+        # skip if no HR (important)
+        if hr is None:
+            continue
 
         data.append({
             "time": pd.to_datetime(act["start_date"]),
-            "hr": hr
+            "hr": float(hr)
         })
 
-    df = pd.DataFrame(data)
+    if len(data) == 0:
+        return None
 
-    if not df.empty:
-        df = df.sort_values("time")
-        df["delta"] = 1
+    df = pd.DataFrame(data).sort_values("time")
+    df["delta"] = 1
 
     return df
+
+
 # ==============================
-# MOCK CONNECTED DEVICE (PHASE 1)
+# MOCK CONNECTED DEVICE
 # ==============================
 def load_from_device():
-    """
-    Simulates pulling data from Fitbit / Apple / Google.
-    Replace later with real API calls.
-    """
-
     base = pd.Timestamp.now()
 
     times = pd.date_range(end=base, periods=300, freq="s")
