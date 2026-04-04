@@ -16,7 +16,7 @@ from data_loader import load_from_device
 st.set_page_config(layout="wide")
 
 # ==============================
-# TITLE (RESTORED)
+# TITLE
 # ==============================
 st.title("🚴 RideX AI — Performance Engine")
 
@@ -28,11 +28,6 @@ st.sidebar.title("👤 Rider Profile")
 age = st.sidebar.number_input("Age", 10, 80, 18)
 resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 70)
 
-training_goal = st.sidebar.selectbox(
-    "Training Goal",
-    ["Build Fitness", "Maintain", "Recover"]
-)
-
 max_hr = 220 - age
 
 # ==============================
@@ -43,26 +38,32 @@ st.sidebar.subheader("🔗 Connect")
 if st.sidebar.button("Connect Strava"):
     st.markdown(f"[Authorize Strava]({get_auth_url()})")
 
-# AUTO READ CODE FROM URL
+# ==============================
+# HANDLE AUTH CODE (FIXED LOOP)
+# ==============================
 query_params = st.query_params
 code = query_params.get("code", None)
 
-# ==============================
-# TOKEN HANDLING
-# ==============================
 if code and "access_token" not in st.session_state:
     token_data = exchange_code_for_token(code)
-
-    st.write(token_data)  # debug (remove later)
 
     if "access_token" in token_data:
         st.session_state["access_token"] = token_data["access_token"]
         st.session_state["refresh_token"] = token_data["refresh_token"]
         st.session_state["expires_at"] = token_data["expires_at"]
+
+        # 🔥 CRITICAL FIX — removes infinite loop
+        st.query_params.clear()
+
+        st.success("✅ Strava Connected")
+
     else:
         st.error("❌ Strava connection failed")
+        st.write(token_data)
 
-# REFRESH TOKEN IF EXPIRED
+# ==============================
+# AUTO REFRESH TOKEN
+# ==============================
 if "access_token" in st.session_state:
     if time.time() > st.session_state["expires_at"]:
         new_tokens = refresh_access_token(st.session_state["refresh_token"])
@@ -72,12 +73,41 @@ if "access_token" in st.session_state:
         st.session_state["expires_at"] = new_tokens["expires_at"]
 
 # ==============================
-# LOAD DATA
+# 📥 UPLOAD DATA (RESTORED)
+# ==============================
+st.subheader("📥 Upload Ride Files")
+
+uploaded_files = st.file_uploader(
+    "Upload TCX/CSV files",
+    type=["tcx", "csv"],
+    accept_multiple_files=True
+)
+
+# ==============================
+# LOAD DATA (PRIORITY SYSTEM)
 # ==============================
 history = []
 all_hr = []
 
-if "access_token" in st.session_state:
+# 🔥 PRIORITY 1: UPLOAD
+if uploaded_files:
+
+    for file in uploaded_files:
+        df = load_from_device()  # placeholder for now
+
+        avg_hr = df["hr"].mean()
+
+        history.append({
+            "date": pd.Timestamp.now(),
+            "load": avg_hr * 0.6,
+            "avg_hr": avg_hr
+        })
+
+        all_hr.extend(df["hr"].tolist())
+
+# 🔥 PRIORITY 2: STRAVA
+elif "access_token" in st.session_state:
+
     activities = get_activities(st.session_state["access_token"])
 
     for act in activities[:5]:
@@ -97,7 +127,7 @@ if "access_token" in st.session_state:
 
         all_hr.append(hr)
 
-# FALLBACK
+# 🔥 PRIORITY 3: SAMPLE
 if not history:
     st.warning("Using sample data")
 
@@ -121,7 +151,7 @@ zone_low = s.mean() - 0.5 * s.std()
 zone_high = s.mean() + 0.5 * s.std()
 
 # ==============================
-# HISTORY
+# HISTORY TABLE
 # ==============================
 history_df = pd.DataFrame(history).sort_values("date")
 
@@ -198,7 +228,7 @@ df_live = None
 live_mode = st.radio("Live Source", ["Upload", "Sample"])
 
 if live_mode == "Upload":
-    lf = st.file_uploader("Upload file", type=["tcx", "csv"])
+    lf = st.file_uploader("Upload live file", type=["tcx", "csv"])
 
     if lf is not None:
         df_live = load_from_device()
@@ -207,7 +237,7 @@ else:
     df_live = load_from_device()
 
 # ==============================
-# SIMULATION
+# LIVE SIMULATION
 # ==============================
 if df_live is not None and not df_live.empty:
 
