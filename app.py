@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 
-from fatigue_prediction import calculate_fatigue
+# ✅ FIXED IMPORT
+from fatigue_model import calculate_fatigue
 
 st.set_page_config(layout="wide")
 
@@ -23,15 +24,6 @@ goal = st.sidebar.selectbox(
 )
 
 max_hr = 220 - age
-
-# ==============================
-# FUTURE INTEGRATION (READY)
-# ==============================
-def load_external_data(source):
-    """
-    Placeholder for Fitbit / Google Fit / Apple Health
-    """
-    return None
 
 
 # ==============================
@@ -267,7 +259,7 @@ if history:
     TSB = history_df["TSB"].iloc[-1]
 
     # ==============================
-    # 3-DAY PLAN
+    # 🚀 3-DAY PLAN
     # ==============================
     st.subheader("🚀 3-Day Training Plan")
 
