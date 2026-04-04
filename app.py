@@ -29,10 +29,24 @@ st.sidebar.title("👤 Rider Profile")
 age = st.sidebar.number_input("Age", 10, 80, 18)
 resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 70)
 
+# ✅ RESTORED TRAINING GOAL
+training_goal = st.sidebar.selectbox(
+    "Training Goal",
+    ["Build Fitness", "Maintain", "Recover"]
+)
+
 max_hr = 220 - age
 
 # ==============================
-# TCX PARSER (RESTORED)
+# ✅ DATA SOURCE SELECTOR (ADDED)
+# ==============================
+data_mode = st.sidebar.radio(
+    "Data Source",
+    ["Upload Files", "Strava", "Sample Data"]
+)
+
+# ==============================
+# TCX PARSER
 # ==============================
 @st.cache_data
 def parse_tcx(file_bytes):
@@ -58,7 +72,7 @@ def parse_tcx(file_bytes):
     return df
 
 # ==============================
-# CSV PARSER (RESTORED)
+# CSV PARSER
 # ==============================
 @st.cache_data
 def parse_csv(file_bytes):
@@ -106,67 +120,73 @@ if "access_token" in st.session_state:
         st.session_state["expires_at"] = new_tokens["expires_at"]
 
 # ==============================
-# 📥 UPLOAD FILES (RESTORED)
+# DATA PIPELINE (CONTROLLED)
 # ==============================
-st.subheader("📥 Upload Ride Files")
-
-uploaded_files = st.file_uploader(
-    "Upload TCX/CSV",
-    type=["tcx", "csv"],
-    accept_multiple_files=True
-)
-
 history = []
 all_hr = []
 
-# ==============================
-# DATA PIPELINE
-# ==============================
+# 🔵 UPLOAD MODE
+if data_mode == "Upload Files":
 
-# 🔵 1. FILE PIPELINE (PRIMARY)
-if uploaded_files:
+    st.subheader("📥 Upload Ride Files")
 
-    for f in uploaded_files:
-        b = f.read()
+    uploaded_files = st.file_uploader(
+        "Upload TCX/CSV",
+        type=["tcx", "csv"],
+        accept_multiple_files=True
+    )
 
-        df = parse_tcx(b) if f.name.endswith(".tcx") else parse_csv(b)
+    if uploaded_files:
+        for f in uploaded_files:
+            b = f.read()
 
-        if not df.empty:
-            df = compute_fatigue(df, resting_hr, max_hr)
+            df = parse_tcx(b) if f.name.endswith(".tcx") else parse_csv(b)
 
-            all_hr.extend(df["hr"])
+            if not df.empty:
+                df = compute_fatigue(df, resting_hr, max_hr)
+
+                all_hr.extend(df["hr"])
+
+                history.append({
+                    "date": df["time"].iloc[-1],
+                    "load": df["fatigue"].mean(),
+                    "avg_hr": df["hr"].mean()
+                })
+
+    else:
+        st.warning("Upload files to proceed")
+
+# 🟢 STRAVA MODE
+elif data_mode == "Strava":
+
+    if "access_token" in st.session_state:
+
+        activities = get_activities(st.session_state["access_token"])
+
+        for act in activities[:5]:
+            if act.get("type") != "Ride":
+                continue
+
+            hr = act.get("average_heartrate", None)
+
+            if hr is None:
+                continue
 
             history.append({
-                "date": df["time"].iloc[-1],
-                "load": df["fatigue"].mean(),
-                "avg_hr": df["hr"].mean()
+                "date": pd.to_datetime(act["start_date"]),
+                "load": hr * 0.6,
+                "avg_hr": hr
             })
 
-# 🟢 2. STRAVA PIPELINE
-elif "access_token" in st.session_state:
+            all_hr.append(hr)
 
-    activities = get_activities(st.session_state["access_token"])
+    else:
+        st.warning("Connect Strava to load data")
 
-    for act in activities[:5]:
-        if act.get("type") != "Ride":
-            continue
+# 🟡 SAMPLE MODE
+elif data_mode == "Sample Data":
 
-        hr = act.get("average_heartrate", None)
-
-        if hr is None:
-            continue
-
-        history.append({
-            "date": pd.to_datetime(act["start_date"]),
-            "load": hr * 0.6,
-            "avg_hr": hr
-        })
-
-        all_hr.append(hr)
-
-# 🟡 3. SAMPLE FALLBACK
-if not history:
-    st.warning("Using sample data")
+    st.info("Using sample data")
 
     for i in range(5):
         hr = 120 + np.random.randint(-10, 20)
@@ -178,6 +198,12 @@ if not history:
         })
 
         all_hr.append(hr)
+
+# ==============================
+# SAFETY STOP (ADDED)
+# ==============================
+if not history:
+    st.stop()
 
 # ==============================
 # ADAPTIVE ZONES
@@ -212,7 +238,7 @@ c2.metric("CTL", f"{CTL:.1f}")
 c3.metric("TSB", f"{TSB:.1f}")
 
 # ==============================
-# GRAPH (RESTORED)
+# GRAPH
 # ==============================
 fig, ax = plt.subplots()
 
