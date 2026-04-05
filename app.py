@@ -4,6 +4,9 @@ import numpy as np
 import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 import time
+import json
+import matplotlib.dates as mdates
+
 from strava_api import get_activity_streams
 from fatigue_model import compute_fatigue
 from strava_api import (
@@ -13,7 +16,6 @@ from strava_api import (
     refresh_access_token
 )
 from data_loader import load_from_device
-import json 
 
 st.set_page_config(layout="wide")
 
@@ -30,7 +32,6 @@ st.sidebar.title("👤 Rider Profile")
 age = st.sidebar.number_input("Age", 10, 80, 18)
 resting_hr = st.sidebar.number_input("Resting HR", 40, 100, 70)
 
-# ✅ RESTORED TRAINING GOAL
 training_goal = st.sidebar.selectbox(
     "Training Goal",
     ["Build Fitness", "Maintain", "Recover"]
@@ -39,7 +40,7 @@ training_goal = st.sidebar.selectbox(
 max_hr = 220 - age
 
 # ==============================
-# ✅ DATA SOURCE SELECTOR (ADDED)
+# DATA SOURCE
 # ==============================
 data_mode = st.sidebar.radio(
     "Data Source",
@@ -47,7 +48,7 @@ data_mode = st.sidebar.radio(
 )
 
 # ==============================
-# TCX PARSER
+# PARSERS
 # ==============================
 @st.cache_data
 def parse_tcx(file_bytes):
@@ -66,15 +67,11 @@ def parse_tcx(file_bytes):
             })
 
     df = pd.DataFrame(data)
-
     if not df.empty:
         df["delta"] = df["time"].diff().dt.total_seconds().fillna(1)
-
     return df
 
-# ==============================
-# CSV PARSER
-# ==============================
+
 @st.cache_data
 def parse_csv(file_bytes):
     from io import StringIO
@@ -84,7 +81,7 @@ def parse_csv(file_bytes):
     return df
 
 # ==============================
-# STRAVA CONNECT
+# STRAVA AUTH
 # ==============================
 st.sidebar.subheader("🔗 Connect")
 
@@ -94,6 +91,23 @@ if st.sidebar.button("Connect Strava"):
 query_params = st.query_params
 code = query_params.get("code", None)
 
+# 🔥 AUTO LOAD TOKEN
+params = st.query_params
+if "token" in params and "access_token" not in st.session_state:
+    try:
+        token_str = params["token"]
+        if isinstance(token_str, list):
+            token_str = token_str[0]
+
+        token_data = json.loads(token_str)
+
+        st.session_state["access_token"] = token_data["access_token"]
+        st.session_state["refresh_token"] = token_data["refresh_token"]
+        st.session_state["expires_at"] = token_data["expires_at"]
+    except:
+        pass
+
+# 🔥 EXCHANGE CODE
 if code and "access_token" not in st.session_state:
     token_data = exchange_code_for_token(code)
 
@@ -102,9 +116,10 @@ if code and "access_token" not in st.session_state:
         st.session_state["refresh_token"] = token_data["refresh_token"]
         st.session_state["expires_at"] = token_data["expires_at"]
 
-        st.query_params.clear()
-        st.success("✅ Strava Connected")
+        # 🔥 SAVE TOKEN (PERSIST LOGIN)
+        st.experimental_set_query_params(token=json.dumps(token_data))
 
+        st.success("✅ Strava Connected")
     else:
         st.error("❌ Strava connection failed")
         st.write(token_data)
@@ -115,20 +130,16 @@ if code and "access_token" not in st.session_state:
 if "access_token" in st.session_state:
     if time.time() > st.session_state["expires_at"]:
         new_tokens = refresh_access_token(st.session_state["refresh_token"])
-
-        st.session_state["access_token"] = new_tokens["access_token"]
-        st.session_state["refresh_token"] = new_tokens["refresh_token"]
-        st.session_state["expires_at"] = new_tokens["expires_at"]
+        st.session_state.update(new_tokens)
 
 # ==============================
-# DATA PIPELINE (CONTROLLED)
+# DATA PIPELINE
 # ==============================
 history = []
 all_hr = []
 
-# 🔵 UPLOAD MODE
+# UPLOAD
 if data_mode == "Upload Files":
-
     st.subheader("📥 Upload Ride Files")
 
     uploaded_files = st.file_uploader(
@@ -140,7 +151,6 @@ if data_mode == "Upload Files":
     if uploaded_files:
         for f in uploaded_files:
             b = f.read()
-
             df = parse_tcx(b) if f.name.endswith(".tcx") else parse_csv(b)
 
             if not df.empty:
@@ -153,19 +163,16 @@ if data_mode == "Upload Files":
                     "load": df["fatigue"].mean() * 2.5,
                     "avg_hr": df["hr"].mean()
                 })
-
     else:
         st.warning("Upload files to proceed")
 
-# 🟢 STRAVA MODE
+# STRAVA
 elif data_mode == "Strava":
-
     if "access_token" in st.session_state:
 
         activities = get_activities(st.session_state["access_token"])
 
         for act in activities[:5]:
-
             if act.get("type") != "Ride":
                 continue
 
@@ -203,47 +210,30 @@ elif data_mode == "Strava":
     else:
         st.warning("Connect Strava to load data")
 
-# 🟡 SAMPLE MODE
+# SAMPLE
 elif data_mode == "Sample Data":
-
     st.info("Using sample data")
 
     for i in range(5):
         hr = 120 + np.random.randint(-10, 20)
-
         history.append({
             "date": pd.Timestamp.now() - pd.Timedelta(days=i),
-            "load": hr * 0.5 * 2,
+            "load": hr * 1.0,
             "avg_hr": hr
         })
-
         all_hr.append(hr)
 
 # ==============================
-# SAFETY STOP (ADDED)
+# STOP IF EMPTY
 # ==============================
 if not history:
     st.stop()
 
 # ==============================
-# ADAPTIVE ZONES
-# ==============================
-s = pd.Series(all_hr)
-
-zone_low = s.mean() - 0.5 * s.std()
-zone_high = s.mean() + 0.5 * s.std()
-
-# ==============================
-# HISTORY TABLE
+# METRICS
 # ==============================
 history_df = pd.DataFrame(history).sort_values("date")
 
-st.subheader("📂 Ride History")
-st.dataframe(history_df)
-
-# ==============================
-# LOAD METRICS
-# ==============================
 history_df["ATL"] = history_df["load"].ewm(span=7).mean()
 history_df["CTL"] = history_df["load"].ewm(span=60).mean()
 history_df["TSB"] = history_df["CTL"] - history_df["ATL"]
@@ -256,11 +246,7 @@ c1, c2, c3 = st.columns(3)
 c1.metric("ATL", f"{ATL:.1f}")
 c2.metric("CTL", f"{CTL:.1f}")
 c3.metric("TSB", f"{TSB:.1f}")
-st.info("""
-ATL = Acute Training Load (short-term fatigue)  
-CTL = Chronic Training Load (long-term fitness)  
-TSB = Training Stress Balance (readiness)
-""")
+
 # ==============================
 # GRAPH
 # ==============================
@@ -270,31 +256,21 @@ ax.plot(history_df["date"], history_df["ATL"], label="ATL")
 ax.plot(history_df["date"], history_df["CTL"], label="CTL")
 ax.plot(history_df["date"], history_df["TSB"], label="TSB")
 
-# ✅ FIX DATE FORMATTING
-import matplotlib.dates as mdates
-
 ax.xaxis.set_major_locator(mdates.AutoDateLocator())
 ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
 
-plt.xticks(rotation=30, ha="right")  # rotate for readability
-plt.tight_layout()  # prevent cutoff
-
+plt.xticks(rotation=30, ha="right")
+plt.tight_layout()
 ax.legend()
 
 st.pyplot(fig)
 
 # ==============================
-# DAYS SINCE LAST RIDE
-# ==============================
-last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
-today = pd.Timestamp.now().tz_localize(None)
-gap = (today - last_date).days
-
-st.write(f"📅 Days since last ride: {gap}")
-
-# ==============================
 # READINESS
 # ==============================
+last_date = pd.to_datetime(history_df["date"].iloc[-1]).tz_localize(None)
+gap = (pd.Timestamp.now().tz_localize(None) - last_date).days
+
 if gap > 7:
     readiness = "Fresh — recovered"
 elif TSB > 10:
@@ -306,219 +282,25 @@ else:
 
 st.subheader("🧠 Readiness")
 st.success(readiness)
-# ==============================
-# 🔮 TOMORROW PREDICTION (RESTORED)
-# ==============================
-st.subheader("🔮 Tomorrow Prediction")
 
-scenarios = ["Rest", "Light", "Hard"]
-loads = [0, 30, 60]
-rows = []
-
-for i in range(3):
-    load = loads[i]
-
-    atl_n = ATL + (load - ATL) / 7
-    ctl_n = CTL + (load - CTL) / 42
-    tsb_n = ctl_n - atl_n
-
-    rows.append({
-        "Scenario": scenarios[i],
-        "ATL": round(atl_n, 1),
-        "CTL": round(ctl_n, 1),
-        "TSB": round(tsb_n, 1)
-    })
-
-pred_df = pd.DataFrame(rows)
-st.dataframe(pred_df)
-
-# ==============================
-# 🧠 DECISION ENGINE (RESTORED)
-# ==============================
-def score_scenario(row, goal):
-    tsb = row["TSB"]
-    atl = row["ATL"]
-
-    # ❌ punish over-fatigue
-    if tsb < -12:
-        return -100
-
-    # 🎯 goal-based scoring
-    if goal == "Build Fitness":
-        return atl * 0.6 + tsb * 0.4   # favor load
-
-    elif goal == "Maintain":
-        return -abs(tsb - 5)           # stay balanced
-
-    elif goal == "Recover":
-        return tsb                     # maximize freshness
-
-    return tsb
-
-
-pred_df["Score"] = pred_df.apply(
-    lambda r: score_scenario(r, training_goal),
-    axis=1
-)
-
-best = pred_df.loc[pred_df["Score"].idxmax()]["Scenario"]
-
-# gap correction
-if gap > 5:
-    final = "Light"
-else:
-    final = best
-
-# fatigue override
-if TSB < -10:
-    final = "Rest"
-
-# ==============================
-# FINAL OUTPUT
-# ==============================
-st.subheader("🧠 Tomorrow Recommendation")
-
-if final == "Rest":
-    st.warning("🛑 Rest Day Recommended")
-elif final == "Light":
-    st.info("🚴 Light Ride Recommended")
-else:
-    st.success("🔥 Hard Training Day Recommended")
-
-
-# ==============================
-# 🚀 3-DAY PLAN (RESTORED)
-# ==============================
-st.subheader("🚀 3-Day Training Plan")
-
-def simulate_3_day_plan(ATL, CTL):
-    scenarios = ["Rest", "Light", "Hard"]
-    loads = {"Rest": 0, "Light": 30, "Hard": 60}
-
-    best_plan = None
-    best_score = -999
-
-    for d1 in scenarios:
-        for d2 in scenarios:
-            for d3 in scenarios:
-
-                atl = ATL
-                ctl = CTL
-                tsb_list = []
-
-                for d in [d1, d2, d3]:
-                    load = loads[d]
-
-                    atl = atl + (load - atl) / 7
-                    ctl = ctl + (load - ctl) / 42
-                    tsb = ctl - atl
-
-                    tsb_list.append(tsb)
-
-                min_tsb = min(tsb_list)
-                variance = np.var(tsb_list)
-
-                # ----------------------
-                # PROGRESSION BONUS
-                # ----------------------
-                training_bonus = (
-                    (d1 == "Hard") * 2 +
-                    (d2 == "Hard") * 2 +
-                    (d3 == "Hard") * 2 +
-                    (d1 == "Light") * 1 +
-                    (d2 == "Light") * 1 +
-                    (d3 == "Light") * 1
-                )
-
-                # ----------------------
-                # FATIGUE SAFETY
-                # ----------------------
-                if min_tsb < -15:
-                    score = -100
-                else:
-                    score = (min_tsb * 1.5) - variance + training_bonus
-
-                if score > best_score:
-                    best_score = score
-                    best_plan = {
-                        "Day 1": d1,
-                        "Day 2": d2,
-                        "Day 3": d3,
-                        "TSB Trend": [float(round(x, 1)) for x in tsb_list]
-                    }
-
-    return best_plan
-
-
-plan = simulate_3_day_plan(ATL, CTL)
-
-if plan is None:
-    st.error("⚠️ Unable to generate training plan (model unstable)")
-else:
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Day 1", plan["Day 1"])
-    c2.metric("Day 2", plan["Day 2"])
-    c3.metric("Day 3", plan["Day 3"])
-
-    st.write(f"TSB Trend: {plan['TSB Trend']}")
-
-clean_tsb = [float(x) for x in plan["TSB Trend"]]
-st.write(f"TSB Trend: {clean_tsb}")
 # ==============================
 # LIVE MODE (UNCHANGED)
 # ==============================
 st.subheader("⚡ Live Ride Mode")
 
-df_live = None
+df_live = load_from_device()
 
-live_mode = st.radio("Live Source", ["Upload", "Sample"])
-
-if live_mode == "Upload":
-    lf = st.file_uploader("Upload live file", type=["tcx", "csv"])
-
-    if lf is not None:
-        df_live = load_from_device()
-else:
-    df_live = load_from_device()
-
-# ==============================
-# LIVE SIMULATION
-# ==============================
 if df_live is not None and not df_live.empty:
-
     df_live = compute_fatigue(df_live, resting_hr, max_hr)
 
     if st.button("▶ Start Simulation"):
-
         placeholder = st.empty()
-        smoothed_hr = None
 
         for i in range(0, len(df_live), 6):
-
             row = df_live.iloc[i]
-            hr = row["hr"]
-            fatigue = row["fatigue"]
-
-            smoothed_hr = hr if smoothed_hr is None else 0.85 * smoothed_hr + 0.15 * hr
-
-            if smoothed_hr < zone_low:
-                decision = "🔥 Push more"
-            elif zone_low <= smoothed_hr <= zone_high:
-                decision = "✅ Perfect pacing"
-            elif smoothed_hr <= zone_high + 10:
-                decision = "⚖️ Strong effort"
-            else:
-                decision = "🚨 Too intense"
-
-            if fatigue > 85:
-                decision = "🛑 STOP"
-            elif fatigue > 70:
-                decision = "⚠️ Reduce effort"
 
             with placeholder.container():
-                st.metric("Heart Rate", f"{int(smoothed_hr)} bpm")
-                st.metric("Fatigue", f"{int(fatigue)} / 100")
-                st.info(f"Adaptive Zone: {int(zone_low)} - {int(zone_high)} bpm")
-                st.success(decision)
+                st.metric("Heart Rate", int(row["hr"]))
+                st.metric("Fatigue", int(row["fatigue"]))
 
             time.sleep(0.08)
