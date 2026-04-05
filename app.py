@@ -195,7 +195,7 @@ elif data_mode == "Strava":
 
             history.append({
                 "date": df_stream["time"].iloc[-1],
-                "load": df_stream["fatigue"].mean() * 2.5,
+                "load" = df_stream["fatigue"].sum() / 10,
                 "avg_hr": df_stream["hr"].mean()
             })
 
