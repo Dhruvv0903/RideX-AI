@@ -4,7 +4,7 @@ import numpy as np
 import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
 import time
-
+from strava_api import get_activity_streams
 from fatigue_model import compute_fatigue
 from strava_api import (
     get_auth_url,
