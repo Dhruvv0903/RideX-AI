@@ -63,3 +63,24 @@ def get_activities(access_token):
         return []
 
     return response.json()
+# ==============================
+# GET ACTIVITY STREAMS (HR DATA)
+# ==============================
+def get_activity_streams(activity_id, access_token):
+    url = f"https://www.strava.com/api/v3/activities/{activity_id}/streams"
+
+    params = {
+        "keys": "heartrate,time",
+        "key_by_type": "true"
+    }
+
+    headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code != 200:
+        return None
+
+    return response.json()
