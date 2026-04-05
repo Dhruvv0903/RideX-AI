@@ -384,7 +384,7 @@ def simulate_3_day_plan(ATL, CTL):
                         "Day 1": d1,
                         "Day 2": d2,
                         "Day 3": d3,
-                        "TSB Trend": [round(x, 1) for x in tsb_list]
+                        "TSB Trend": [float(round(x, 1)) for x in tsb_list]
                     }
 
     return best_plan
@@ -397,7 +397,8 @@ c1.metric("Day 1", plan["Day 1"])
 c2.metric("Day 2", plan["Day 2"])
 c3.metric("Day 3", plan["Day 3"])
 
-st.write(f"TSB Trend: {plan['TSB Trend']}")
+clean_tsb = [float(x) for x in plan["TSB Trend"]]
+st.write(f"TSB Trend: {clean_tsb}")
 # ==============================
 # LIVE MODE (UNCHANGED)
 # ==============================
