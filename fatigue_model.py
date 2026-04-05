@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 # ==============================
 # EXISTING FUNCTION (KEEP)
@@ -22,23 +23,65 @@ def calculate_fatigue(hr, cadence, slope, duration_min, elevation_m):
 
 
 # ==============================
-# 🔥 NEW FUNCTION (REQUIRED BY APP)
+# 🔥 UPGRADED PERFORMANCE MODEL
 # ==============================
 def compute_fatigue(df, resting_hr, max_hr):
+
     fatigue = 0
-    out = []
+    fatigue_series = []
+    zone_series = []
 
     for _, r in df.iterrows():
-        intensity = max(0, (r["hr"] - resting_hr) / (max_hr - resting_hr))
 
-        fatigue += intensity * r["delta"] * 0.03
-        fatigue -= 0.015 * r["delta"]
+        hr = r["hr"]
+        delta = r["delta"]
 
+        # ----------------------
+        # INTENSITY (normalized)
+        # ----------------------
+        intensity = max(0, (hr - resting_hr) / (max_hr - resting_hr))
+        intensity = min(intensity, 1.2)  # allow slight overshoot
+
+        # ----------------------
+        # HR ZONES
+        # ----------------------
+        if intensity < 0.5:
+            zone = "Z1"
+            load_factor = 0.5
+        elif intensity < 0.7:
+            zone = "Z2"
+            load_factor = 0.8
+        elif intensity < 0.85:
+            zone = "Z3"
+            load_factor = 1.2
+        elif intensity < 1.0:
+            zone = "Z4"
+            load_factor = 1.6
+        else:
+            zone = "Z5"
+            load_factor = 2.2
+
+        zone_series.append(zone)
+
+        # ----------------------
+        # FATIGUE BUILDUP
+        # ----------------------
+        fatigue += intensity * load_factor * delta * 0.035
+
+        # ----------------------
+        # RECOVERY DECAY
+        # ----------------------
+        fatigue -= 0.02 * delta
+
+        # clamp
         fatigue = max(0, min(100, fatigue))
-        out.append(fatigue)
+
+        fatigue_series.append(fatigue)
 
     df = df.copy()
-    df["fatigue"] = out
+    df["fatigue"] = fatigue_series
+    df["zone"] = zone_series
+
     return df
 
 
@@ -48,19 +91,22 @@ def compute_fatigue(df, resting_hr, max_hr):
 def generate_insights(df):
     insights = []
 
-    max_fatigue = df['fatigue_score'].max()
-    avg_fatigue = df['fatigue_score'].mean()
+    if "fatigue" in df:
+        max_fatigue = df['fatigue'].max()
+        avg_fatigue = df['fatigue'].mean()
 
-    if max_fatigue > 70:
-        insights.append("⚠️ High fatigue reached — consider recovery.")
+        if max_fatigue > 80:
+            insights.append("⚠️ Peak fatigue very high — risk of burnout.")
 
-    if avg_fatigue > 50:
-        insights.append("🔥 Overall ride intensity was high.")
+        if avg_fatigue > 60:
+            insights.append("🔥 Sustained high intensity effort.")
 
-    if (df['cadence'] < 70).sum() > len(df)*0.3:
-        insights.append("🚴 Low cadence contributed to fatigue.")
+    if "zone" in df:
+        z5_time = (df["zone"] == "Z5").sum()
+        if z5_time > len(df) * 0.2:
+            insights.append("🚨 Too much time in max zone.")
 
     if len(insights) == 0:
-        insights.append("✅ Ride intensity was well managed.")
+        insights.append("✅ Effort distribution balanced.")
 
     return insights
