@@ -236,7 +236,11 @@ c1, c2, c3 = st.columns(3)
 c1.metric("ATL", f"{ATL:.1f}")
 c2.metric("CTL", f"{CTL:.1f}")
 c3.metric("TSB", f"{TSB:.1f}")
-
+st.info("""
+ATL = Acute Training Load (short-term fatigue)  
+CTL = Chronic Training Load (long-term fitness)  
+TSB = Training Stress Balance (readiness)
+""")
 # ==============================
 # GRAPH
 # ==============================
