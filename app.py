@@ -161,24 +161,44 @@ elif data_mode == "Strava":
 
     if "access_token" in st.session_state:
 
-        activities = get_activities(st.session_state["access_token"])
+       activities = get_activities(st.session_state["access_token"])
 
         for act in activities[:5]:
+        
             if act.get("type") != "Ride":
                 continue
-
-            hr = act.get("average_heartrate", None)
-
-            if hr is None:
+        
+            streams = get_activity_streams(
+                act["id"],
+                st.session_state["access_token"]
+            )
+        
+            if not streams or "heartrate" not in streams:
                 continue
-
-            history.append({
-                "date": pd.to_datetime(act["start_date"]),
-                "load": hr * 0.6 * 1.8,
-                "avg_hr": hr
+        
+            hr_data = streams["heartrate"]["data"]
+            time_data = streams["time"]["data"]
+        
+            if len(hr_data) == 0:
+                continue
+        
+            df_stream = pd.DataFrame({
+                "time": pd.to_datetime(act["start_date"]) + pd.to_timedelta(time_data, unit="s"),
+                "hr": hr_data
             })
-
-            all_hr.append(hr)
+        
+            df_stream["delta"] = df_stream["time"].diff().dt.total_seconds().fillna(1)
+        
+            # 🔥 REAL FATIGUE (your model now works properly)
+            df_stream = compute_fatigue(df_stream, resting_hr, max_hr)
+        
+            all_hr.extend(df_stream["hr"])
+        
+            history.append({
+                "date": df_stream["time"].iloc[-1],
+                "load": df_stream["fatigue"].mean() * 2.5,
+                "avg_hr": df_stream["hr"].mean()
+            })
 
     else:
         st.warning("Connect Strava to load data")
