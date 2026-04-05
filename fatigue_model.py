@@ -71,7 +71,7 @@ def compute_fatigue(df, resting_hr, max_hr):
         # ----------------------
         # RECOVERY DECAY
         # ----------------------
-        fatigue -= 0.02 * delta
+        fatigue -= 0.008 * r["delta"]
 
         # clamp
         fatigue = max(0, min(100, fatigue))
