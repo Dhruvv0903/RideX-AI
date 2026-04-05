@@ -13,6 +13,7 @@ from strava_api import (
     refresh_access_token
 )
 from data_loader import load_from_device
+import json 
 
 st.set_page_config(layout="wide")
 
