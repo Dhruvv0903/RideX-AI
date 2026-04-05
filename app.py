@@ -149,7 +149,7 @@ if data_mode == "Upload Files":
 
                 history.append({
                     "date": df["time"].iloc[-1],
-                    "load": df["fatigue"].mean(),
+                    "load": df["fatigue"].mean() * 2.5,
                     "avg_hr": df["hr"].mean()
                 })
 
@@ -174,7 +174,7 @@ elif data_mode == "Strava":
 
             history.append({
                 "date": pd.to_datetime(act["start_date"]),
-                "load": hr * 0.6,
+                "load": hr * 0.6 * 1.8,
                 "avg_hr": hr
             })
 
@@ -193,7 +193,7 @@ elif data_mode == "Sample Data":
 
         history.append({
             "date": pd.Timestamp.now() - pd.Timedelta(days=i),
-            "load": hr * 0.5,
+            "load": hr * 0.5 * 2,
             "avg_hr": hr
         })
 
