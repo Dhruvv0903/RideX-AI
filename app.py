@@ -250,7 +250,17 @@ ax.plot(history_df["date"], history_df["ATL"], label="ATL")
 ax.plot(history_df["date"], history_df["CTL"], label="CTL")
 ax.plot(history_df["date"], history_df["TSB"], label="TSB")
 
+# ✅ FIX DATE FORMATTING
+import matplotlib.dates as mdates
+
+ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+
+plt.xticks(rotation=30, ha="right")  # rotate for readability
+plt.tight_layout()  # prevent cutoff
+
 ax.legend()
+
 st.pyplot(fig)
 
 # ==============================
