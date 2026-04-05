@@ -373,10 +373,25 @@ def simulate_3_day_plan(ATL, CTL):
                 min_tsb = min(tsb_list)
                 variance = np.var(tsb_list)
 
+                # ----------------------
+                # PROGRESSION BONUS
+                # ----------------------
+                training_bonus = (
+                    (d1 == "Hard") * 2 +
+                    (d2 == "Hard") * 2 +
+                    (d3 == "Hard") * 2 +
+                    (d1 == "Light") * 1 +
+                    (d2 == "Light") * 1 +
+                    (d3 == "Light") * 1
+                )
+
+                # ----------------------
+                # FATIGUE SAFETY
+                # ----------------------
                 if min_tsb < -15:
                     score = -100
                 else:
-                    score = min_tsb - variance
+                    score = (min_tsb * 1.5) - variance + training_bonus
 
                 if score > best_score:
                     best_score = score
