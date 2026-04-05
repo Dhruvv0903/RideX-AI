@@ -334,8 +334,33 @@ st.dataframe(pred_df)
 # ==============================
 # 🧠 DECISION ENGINE (RESTORED)
 # ==============================
-best_row = pred_df.loc[pred_df["TSB"].idxmax()]
-best = best_row["Scenario"]
+def score_scenario(row, goal):
+    tsb = row["TSB"]
+    atl = row["ATL"]
+
+    # ❌ punish over-fatigue
+    if tsb < -12:
+        return -100
+
+    # 🎯 goal-based scoring
+    if goal == "Build Fitness":
+        return atl * 0.6 + tsb * 0.4   # favor load
+
+    elif goal == "Maintain":
+        return -abs(tsb - 5)           # stay balanced
+
+    elif goal == "Recover":
+        return tsb                     # maximize freshness
+
+    return tsb
+
+
+pred_df["Score"] = pred_df.apply(
+    lambda r: score_scenario(r, training_goal),
+    axis=1
+)
+
+best = pred_df.loc[pred_df["Score"].idxmax()]["Scenario"]
 
 # gap correction
 if gap > 5:
