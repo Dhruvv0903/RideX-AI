@@ -244,7 +244,7 @@ st.dataframe(history_df)
 # LOAD METRICS
 # ==============================
 history_df["ATL"] = history_df["load"].ewm(span=7).mean()
-history_df["CTL"] = history_df["load"].ewm(span=42).mean()
+history_df["CTL"] = history_df["load"].ewm(span=60).mean()
 history_df["TSB"] = history_df["CTL"] - history_df["ATL"]
 
 ATL = history_df["ATL"].iloc[-1]
