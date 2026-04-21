@@ -16,25 +16,7 @@ from strava_api import (
     refresh_access_token
 )
 from data_loader import load_from_device
-import pickle
-import os
 
-@st.cache_data
-def load_tokens():
-    if os.path.exists("tokens.pkl"):
-        with open("tokens.pkl", "rb") as f:
-            return pickle.load(f)
-    return {}
-
-@st.cache_data
-def save_tokens(tokens):
-    with open("tokens.pkl", "wb") as f:
-        pickle.dump(tokens, f)
-
-# In auth, after setting st.session_state:
-save_tokens({"access_token": st.session_state["access_token"], ...})
-# On load: st.session_state.update(load_tokens())
-st.set_page_config(layout="wide")
 
 # ==============================
 # TITLE
