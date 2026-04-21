@@ -83,29 +83,45 @@ def parse_csv(file_bytes):
 # ==============================
 # STRAVA AUTH
 # ==============================
-st.sidebar.subheader("🔗 Connect")
 
-if st.sidebar.button("Connect Strava"):
-    st.markdown(f"[Authorize Strava]({get_auth_url()})")
+st.sidebar.subheader("🔗 Connect Strava")
 
-query_params = st.query_params
-code = query_params.get("code", None)
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    st.session_state.expires_at = 0
 
-# 🔥 AUTO LOAD TOKEN
-params = st.query_params
-if "token" in params and "access_token" not in st.session_state:
+if st.sidebar.button("1. Get Auth URL"):
+    st.sidebar.markdown(f"[Authorize Here]({get_auth_url()})")
+    st.sidebar.info("After approving, copy the ?code=... from URL")
+
+code = st.sidebar.text_input("2. Paste Code Here", placeholder="Copy from browser URL")
+
+if code and st.sidebar.button("3. Exchange Code") and not st.session_state.access_token:
     try:
-        token_str = params["token"]
-        if isinstance(token_str, list):
-            token_str = token_str[0]
+        token_data = exchange_code_for_token(code)
+        if "access_token" in token_data:
+            st.session_state.update(token_data)
+            st.sidebar.success("✅ Connected! Token persists in session.")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ Failed")
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
 
-        token_data = json.loads(token_str)
-
-        st.session_state["access_token"] = token_data["access_token"]
-        st.session_state["refresh_token"] = token_data["refresh_token"]
-        st.session_state["expires_at"] = token_data["expires_at"]
+# Refresh if expired
+if st.session_state.access_token and time.time() > st.session_state.expires_at:
+    try:
+        new_tokens = refresh_access_token(st.session_state.refresh_token)
+        st.session_state.update(new_tokens)
+        st.sidebar.success("🔄 Token refreshed")
     except:
-        pass
+        st.sidebar.warning("Refresh failed—reconnect")
+
+if st.session_state.access_token:
+    st.sidebar.caption("Status: Connected")
+else:
+    st.sidebar.caption("Status: Disconnected")
 
 # 🔥 EXCHANGE CODE
 if code and "access_token" not in st.session_state:
