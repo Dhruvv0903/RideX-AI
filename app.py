@@ -19,7 +19,6 @@ from strava_api import (
     refresh_access_token,
 )
 
-
 st.set_page_config(page_title="RideX AI", page_icon="🚴", layout="wide")
 
 
@@ -230,7 +229,6 @@ def render_today_plan(plan: dict) -> None:
 
 
 def render_scenario_tests() -> None:
-    st.subheader("Coach Logic Check")
     scenarios = [
         {
             "label": "Overtrained",
@@ -276,12 +274,15 @@ def render_scenario_tests() -> None:
             st.write(f"**Instruction:** {plan['instruction']}")
             st.write(f"**Fallback:** {plan['fallback']}")
             st.write(f"**Confidence:** {plan['confidence']}")
+
+
 def render_coach_logic_state(strava_connected: bool) -> None:
     st.subheader("Coach Logic Check")
     if not strava_connected:
         st.info("Connect Strava first to unlock coach logic checks based on your ride history.")
         return
     render_scenario_tests()
+
 
 st.title("RideX AI - Adaptive Training Decision Engine")
 st.caption(
@@ -294,7 +295,7 @@ resting_hr = st.sidebar.number_input("Resting HR", min_value=40, max_value=100, 
 training_goal = st.sidebar.selectbox("Training Goal", ["Build Fitness", "Maintain", "Recover"])
 max_hr = 220 - age
 
-data_mode = st.sidebar.radio("Data Source", ["Sample Data", "Upload Files", "Strava"])
+data_mode = st.sidebar.radio("Data Source", ["Upload Files", "Strava"])
 
 st.sidebar.subheader("Connect Strava")
 if st.sidebar.button("Connect Strava"):
@@ -371,10 +372,12 @@ elif data_mode == "Strava":
             streams = get_activity_streams(act["id"], st.session_state["access_token"])
             if not streams:
                 continue
+
             hr_data = streams.get("heartrate", {}).get("data")
             time_data = streams.get("time", {}).get("data")
             cadence_data = streams.get("cadence", {}).get("data")
             altitude_data = streams.get("altitude", {}).get("data")
+
             if not hr_data or not time_data:
                 continue
 
@@ -395,13 +398,12 @@ elif data_mode == "Strava":
         st.info("Connect Strava in the sidebar to load your rides and unlock coaching insights.")
 
 if not history:
-     if data_mode == "Strava":
+    if data_mode == "Strava":
         st.warning("No Strava ride history is loaded yet.")
         render_coach_logic_state(strava_connected=False)
     else:
         st.warning("No uploaded ride history yet. Add your files to see how you did and what the coach recommends next.")
     st.stop()
-
 
 history_df = pd.DataFrame(history)
 history_df = compute_fitness_metrics(history_df)
