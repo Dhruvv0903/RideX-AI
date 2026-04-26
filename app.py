@@ -314,7 +314,7 @@ if "access_token" in st.session_state:
 if st.sidebar.button("Connect Strava"):
     auth_url = get_auth_url()
     if auth_url:
-        st.markdown(f"[Authorize Strava]({auth_url})")
+        st.sidebar.markdown(f"[Authorize Strava]({auth_url})")
     else:
         st.sidebar.error(
             "Strava is not configured. Add STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, and STRAVA_REDIRECT_URI."
