@@ -306,7 +306,7 @@ data_mode = st.sidebar.radio(
 # ==============================
 # STRAVA AUTH
 # ==============================
-st.sidebar.subheader("Connect Strava")
+st.sidebar.subheader("🔗 Connect")
 
 if "access_token" in st.session_state:
     st.sidebar.success("Strava connected")
@@ -314,50 +314,53 @@ if "access_token" in st.session_state:
 if st.sidebar.button("Connect Strava"):
     auth_url = get_auth_url()
     if auth_url:
-        st.sidebar.markdown(f"[Authorize Strava]({auth_url})")
+        st.markdown(f"[Authorize Strava]({auth_url})")
     else:
-        st.sidebar.error(
-            "Strava is not configured yet. Add real STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, and STRAVA_REDIRECT_URI values."
-        )
+        st.error("❌ Strava auth URL could not be created")
 
 query_params = st.query_params
 code = query_params.get("code", None)
 if isinstance(code, list):
     code = code[0]
 
-params = st.query_params
-if "token" in params and "access_token" not in st.session_state:
+# Load saved token (persistent login)
+if "token" in query_params and "access_token" not in st.session_state:
     try:
-        token_str = params["token"]
+        token_str = query_params["token"]
         if isinstance(token_str, list):
             token_str = token_str[0]
         token_data = json.loads(token_str)
-        st.session_state["access_token"] = token_data["access_token"]
-        st.session_state["refresh_token"] = token_data["refresh_token"]
-        st.session_state["expires_at"] = token_data["expires_at"]
+        st.session_state.update(token_data)
     except Exception:
         pass
 
+# Exchange code -> token
 if code and "access_token" not in st.session_state:
     token_data = exchange_code_for_token(code)
 
     if "access_token" in token_data:
         st.session_state.update(token_data)
-        st.query_params.clear()
-        st.query_params["token"] = json.dumps(token_data)
-        st.success("Strava connected")
-        st.rerun()
-    else:
-        st.error("Strava connection failed")
 
+        try:
+            st.experimental_set_query_params(token=json.dumps(token_data))
+        except Exception:
+            st.query_params.clear()
+            st.query_params["token"] = json.dumps(token_data)
+
+        st.success("✅ Strava Connected")
+    else:
+        st.error("❌ Strava connection failed")
+        st.write(token_data)
+
+# Refresh token automatically
 if "access_token" in st.session_state:
-    try:
-        if time.time() > st.session_state["expires_at"]:
+    if time.time() > st.session_state["expires_at"]:
+        try:
             new_tokens = refresh_access_token(st.session_state["refresh_token"])
             if "access_token" in new_tokens:
                 st.session_state.update(new_tokens)
-    except Exception:
-        st.sidebar.warning("Could not refresh Strava token. Try reconnecting.")
+        except Exception:
+            pass
 
 # ==============================
 # DATA PIPELINE
@@ -393,17 +396,23 @@ elif data_mode == "Strava":
             if act.get("type") != "Ride":
                 continue
 
-            streams = get_activity_streams(act["id"], st.session_state["access_token"])
+            streams = get_activity_streams(
+                act["id"],
+                st.session_state["access_token"],
+            )
 
-            if not streams or "heartrate" not in streams or "time" not in streams:
+            if not streams or "heartrate" not in streams:
                 continue
 
             hr_data = streams["heartrate"]["data"]
             time_data = streams["time"]["data"]
 
+            if len(hr_data) == 0:
+                continue
+
             df_stream = pd.DataFrame(
                 {
-                    "time": pd.to_datetime(act["start_date"], utc=True) + pd.to_timedelta(time_data, unit="s"),
+                    "time": pd.to_datetime(act["start_date"]) + pd.to_timedelta(time_data, unit="s"),
                     "hr": hr_data,
                 }
             )
@@ -414,7 +423,7 @@ elif data_mode == "Strava":
             all_hr.extend(df_stream["hr"].tolist())
             history.append(
                 {
-                    "date": df_stream["time"].iloc[-1].tz_convert(None),
+                    "date": df_stream["time"].iloc[-1],
                     "load": float(df_stream["fatigue"].sum() / 10),
                     "avg_hr": float(df_stream["hr"].mean()),
                     "peak_fatigue": float(df_stream["fatigue"].max()),
@@ -424,7 +433,7 @@ elif data_mode == "Strava":
             )
             latest_stream = df_stream
     else:
-        st.info("Connect Strava first to load your ride history.")
+        st.warning("Connect Strava to load data")
 
 if not history:
     if data_mode == "Strava":
@@ -457,10 +466,15 @@ fig, ax = plt.subplots(figsize=(9, 4.5))
 ax.plot(history_df["date"], history_df["ATL"], label="ATL", linewidth=2)
 ax.plot(history_df["date"], history_df["CTL"], label="CTL", linewidth=2)
 ax.plot(history_df["date"], history_df["TSB"], label="TSB", linewidth=2)
+
+ax.xaxis.set_major_locator(mdates.AutoDateLocator())
 ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-plt.xticks(rotation=30)
+
+plt.xticks(rotation=30, ha="right")
+plt.tight_layout()
 ax.legend()
 ax.grid(alpha=0.25)
+
 st.pyplot(fig)
 
 # ==============================
@@ -500,13 +514,13 @@ s4.metric("Days Since Ride", gap)
 # ==============================
 # LIVE MODE
 # ==============================
-st.subheader("Live Ride Mode")
+st.subheader("⚡ Live Ride Mode")
 df_live = load_from_device()
 
 if df_live is not None and not df_live.empty:
     df_live = compute_fatigue(finalize_stream_df(df_live), resting_hr, max_hr)
 
-    if st.button("Start Simulation"):
+    if st.button("▶ Start Simulation"):
         placeholder = st.empty()
 
         for i in range(0, len(df_live), 6):
