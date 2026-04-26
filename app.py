@@ -276,7 +276,12 @@ def render_scenario_tests() -> None:
             st.write(f"**Instruction:** {plan['instruction']}")
             st.write(f"**Fallback:** {plan['fallback']}")
             st.write(f"**Confidence:** {plan['confidence']}")
-
+def render_coach_logic_state(strava_connected: bool) -> None:
+    st.subheader("Coach Logic Check")
+    if not strava_connected:
+        st.info("Connect Strava first to unlock coach logic checks based on your ride history.")
+        return
+    render_scenario_tests()
 
 st.title("RideX AI - Adaptive Training Decision Engine")
 st.caption(
@@ -344,36 +349,8 @@ if "access_token" in st.session_state and time.time() > st.session_state["expire
 history = []
 latest_stream = None
 
-if data_mode == "Sample Data":
-    rng = np.random.default_rng(7)
-    for day in range(8):
-        points = 240
-        base = 124 + day * 2
-        hr = np.clip(base + rng.normal(0, 7, points), 95, 186)
-        cadence = np.clip(84 + rng.normal(0, 6, points), 65, 105)
-        elevation = np.cumsum(rng.normal(0.15, 0.8, points))
-        slope = np.clip(rng.normal(1.2, 2.0, points), -6, 8)
-        time_index = pd.date_range(
-            end=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=day),
-            periods=points,
-            freq="15s",
-        )
-        df = pd.DataFrame(
-            {
-                "time": time_index,
-                "hr": hr,
-                "cadence": cadence,
-                "elevation": elevation,
-                "slope": slope,
-            }
-        )
-        df = finalize_stream_df(df)
-        df = compute_fatigue(df, resting_hr, max_hr)
-        history.append(build_history_row(df))
-        if latest_stream is None:
-            latest_stream = df
-
-elif data_mode == "Upload Files":
+if data_mode == "Upload Files":
+    st.caption("Upload your own TCX or CSV ride files to analyze how you performed and how much fatigue the ride created.")
     uploaded_files = st.file_uploader("Upload TCX or CSV files", type=["tcx", "csv"], accept_multiple_files=True)
     if uploaded_files:
         for uploaded_file in uploaded_files:
@@ -415,12 +392,16 @@ elif data_mode == "Strava":
             history.append(build_history_row(df))
             latest_stream = df
     else:
-        st.info("Connect Strava in the sidebar or use Sample Data to explore the app.")
+        st.info("Connect Strava in the sidebar to load your rides and unlock coaching insights.")
 
 if not history:
-    st.warning("No ride history yet. Use Sample Data or upload files to start.")
-    render_scenario_tests()
+     if data_mode == "Strava":
+        st.warning("No Strava ride history is loaded yet.")
+        render_coach_logic_state(strava_connected=False)
+    else:
+        st.warning("No uploaded ride history yet. Add your files to see how you did and what the coach recommends next.")
     st.stop()
+
 
 history_df = pd.DataFrame(history)
 history_df = compute_fitness_metrics(history_df)
@@ -499,4 +480,4 @@ else:
                 c2.metric("Fatigue", int(row["fatigue"]))
             time.sleep(0.08)
 
-render_scenario_tests()
+render_coach_logic_state(strava_connected="access_token" in st.session_state)
