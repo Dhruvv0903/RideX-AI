@@ -9,7 +9,8 @@ def compute_fatigue(df: pd.DataFrame, resting_hr: int, max_hr: int) -> pd.DataFr
     out["hr_ratio"] = ((out["hr"] - resting_hr) / hr_reserve).clip(0, 1.25)
     out["cadence"] = out["cadence"].fillna(85)
     out["slope"] = out["slope"].fillna(0).clip(-12, 12)
-    out["elevation"] = out["elevation"].fillna(method="ffill").fillna(0)
+    out["elevation"] = out["elevation"].ffill().fillna(0)
+
 
     elapsed_min = out["delta"].cumsum() / 60.0
     duration_factor = (elapsed_min / max(elapsed_min.max(), 1)).clip(0, 1)
