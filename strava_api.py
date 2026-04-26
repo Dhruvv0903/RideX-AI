@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
@@ -8,22 +9,83 @@ try:
 except Exception:
     st = None
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
+
 
 AUTH_URL = "https://www.strava.com/oauth/authorize"
 TOKEN_URL = "https://www.strava.com/oauth/token"
 API_BASE = "https://www.strava.com/api/v3"
 
+_LOCAL_SECRETS = None
+
+
+def _load_local_secrets() -> dict:
+    global _LOCAL_SECRETS
+    if _LOCAL_SECRETS is not None:
+        return _LOCAL_SECRETS
+
+    if tomllib is None:
+        _LOCAL_SECRETS = {}
+        return _LOCAL_SECRETS
+
+    candidates = [
+        Path(__file__).resolve().parent / "secrets.toml",
+        Path(__file__).resolve().parent / ".streamlit" / "secrets.toml",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                _LOCAL_SECRETS = tomllib.loads(candidate.read_text())
+                return _LOCAL_SECRETS
+            except Exception:
+                continue
+
+    _LOCAL_SECRETS = {}
+    return _LOCAL_SECRETS
+
+
+def _looks_placeholder(value: str) -> bool:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return True
+
+    placeholders = {
+        "your_client_id",
+        "your_client_secret",
+        "your-app-name",
+        "real_client_id",
+        "real_client_secret",
+        "https://your-app-name.streamlit.app",
+    }
+
+    return (
+        normalized in placeholders
+        or normalized.startswith("your_")
+        or normalized.startswith("real_")
+    )
+
 
 def _get_secret(key: str, default: str = "") -> str:
     value = os.getenv(key, "")
-    if value:
+    if value and not _looks_placeholder(value):
         return value
 
     if st is not None:
         try:
-            return st.secrets.get(key, default)
+            secret_value = st.secrets.get(key, default)
+            if secret_value and not _looks_placeholder(secret_value):
+                return secret_value
         except Exception:
-            return default
+            pass
+
+    local_secrets = _load_local_secrets()
+    local_value = local_secrets.get(key, default)
+    if local_value and not _looks_placeholder(local_value):
+        return local_value
 
     return default
 
