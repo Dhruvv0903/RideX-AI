@@ -317,7 +317,7 @@ if st.sidebar.button("Connect Strava"):
         st.sidebar.markdown(f"[Authorize Strava]({auth_url})")
     else:
         st.sidebar.error(
-            "Strava is not configured. Add STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, and STRAVA_REDIRECT_URI."
+            "Strava is not configured yet. Add real STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, and STRAVA_REDIRECT_URI values."
         )
 
 query_params = st.query_params
