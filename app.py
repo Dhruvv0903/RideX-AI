@@ -127,6 +127,14 @@ def compute_data_confidence(history_df: pd.DataFrame) -> str:
     return "Low"
 
 
+def strava_connected() -> bool:
+    return "access_token" in st.session_state
+
+
+def strava_configured() -> bool:
+    return bool(get_auth_url())
+
+
 def get_today_plan(
     tsb: float,
     atl: float,
@@ -276,12 +284,129 @@ def render_scenario_tests() -> None:
             st.write(f"**Confidence:** {plan['confidence']}")
 
 
-def render_coach_logic_state(strava_connected: bool) -> None:
+def render_coach_logic_state(is_strava_connected: bool) -> None:
     st.subheader("Coach Logic Check")
-    if not strava_connected:
+    if not is_strava_connected:
         st.info("Connect Strava first to unlock coach logic checks based on your ride history.")
         return
     render_scenario_tests()
+
+
+def fetch_latest_strava_live_stream() -> pd.DataFrame | None:
+    if not strava_connected():
+        return None
+
+    activities = get_activities(st.session_state["access_token"], per_page=5)
+    for act in activities:
+        if act.get("type") != "Ride":
+            continue
+
+        streams = get_activity_streams(act["id"], st.session_state["access_token"])
+        hr_data = streams.get("heartrate", {}).get("data") if streams else None
+        time_data = streams.get("time", {}).get("data") if streams else None
+        cadence_data = streams.get("cadence", {}).get("data") if streams else None
+        altitude_data = streams.get("altitude", {}).get("data") if streams else None
+
+        if not hr_data or not time_data:
+            continue
+
+        base_time = pd.to_datetime(act["start_date"], utc=True, errors="coerce")
+        live_df = pd.DataFrame(
+            {
+                "time": base_time + pd.to_timedelta(time_data, unit="s"),
+                "hr": hr_data,
+                "cadence": cadence_data if cadence_data else [np.nan] * len(hr_data),
+                "elevation": altitude_data if altitude_data else [np.nan] * len(hr_data),
+            }
+        )
+        return finalize_stream_df(live_df)
+
+    return None
+
+
+def render_connection_panel() -> None:
+    st.sidebar.subheader("Connections")
+
+    if strava_connected():
+        st.sidebar.success("Strava connected")
+        if st.sidebar.button("Reconnect Strava"):
+            auth_url = get_auth_url()
+            if auth_url:
+                st.markdown(f"[Authorize Strava]({auth_url})")
+    else:
+        if st.sidebar.button("Connect Strava"):
+            auth_url = get_auth_url()
+            if auth_url:
+                st.markdown(f"[Authorize Strava]({auth_url})")
+            else:
+                st.sidebar.info(
+                    "Strava login is not configured in this deployment yet. Add your Strava API credentials in app secrets to enable it."
+                )
+
+    st.sidebar.caption("Live integrations")
+    st.sidebar.write("Strava")
+    st.sidebar.write("Fitbit")
+    st.sidebar.write("Apple Health")
+    st.sidebar.write("Samsung Health")
+
+
+def render_live_mode_section(resting_hr: int, max_hr: int) -> None:
+    st.subheader("Live Mode")
+    st.caption(
+        "Connect a source to simulate a live coaching view. Strava is available in this Streamlit build; other providers need their own API setup or bridge sync."
+    )
+
+    source = st.selectbox(
+        "Live source",
+        ["Strava", "Fitbit", "Apple Health", "Samsung Health", "Manual Simulation"],
+        index=0,
+    )
+
+    if source == "Strava":
+        if not strava_connected():
+            st.info("Connect Strava to replay your latest ride as a live coaching feed.")
+            return
+
+        df_live = fetch_latest_strava_live_stream()
+        if df_live is None or df_live.empty:
+            st.warning("RideX could not find a recent Strava ride with heart-rate stream data.")
+            return
+
+        df_live = compute_fatigue(df_live, resting_hr, max_hr)
+        if st.button("Start Strava Replay"):
+            placeholder = st.empty()
+            for idx in range(0, len(df_live), 8):
+                row = df_live.iloc[idx]
+                with placeholder.container():
+                    c1, c2 = st.columns(2)
+                    c1.metric("Heart Rate", int(row["hr"]))
+                    c2.metric("Fatigue", int(row["fatigue"]))
+                    st.caption("Live coaching replay from your latest Strava ride.")
+                time.sleep(0.08)
+        return
+
+    if source in {"Fitbit", "Apple Health", "Samsung Health"}:
+        st.info(
+            f"{source} needs a dedicated API connection or bridge app before RideX can read live data here. For now, export ride data and use Upload Files."
+        )
+        return
+
+    df_live = load_from_device()
+    if df_live is None:
+        st.caption("No manual simulation feed is available right now.")
+        return
+
+    df_live = compute_fatigue(finalize_stream_df(df_live), resting_hr, max_hr)
+    if st.button("Start Manual Simulation"):
+        placeholder = st.empty()
+        for idx in range(0, len(df_live), 6):
+            row = df_live.iloc[idx]
+            with placeholder.container():
+                c1, c2 = st.columns(2)
+                c1.metric("Heart Rate", int(row["hr"]))
+                c2.metric("Fatigue", int(row["fatigue"]))
+                st.caption("Manual simulation feed for testing the live coaching experience.")
+            time.sleep(0.08)
 
 
 st.title("RideX AI - Adaptive Training Decision Engine")
@@ -297,13 +422,7 @@ max_hr = 220 - age
 
 data_mode = st.sidebar.radio("Data Source", ["Upload Files", "Strava"])
 
-st.sidebar.subheader("Connect Strava")
-if st.sidebar.button("Connect Strava"):
-    auth_url = get_auth_url()
-    if auth_url:
-        st.markdown(f"[Authorize Strava]({auth_url})")
-    else:
-        st.sidebar.warning("Set STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, and STRAVA_REDIRECT_URI first.")
+render_connection_panel()
 
 params = st.query_params
 if "token" in params and "access_token" not in st.session_state:
@@ -340,7 +459,7 @@ if code and "access_token" not in st.session_state:
     except Exception as exc:
         st.error(f"Exchange failed: {exc}")
 
-if "access_token" in st.session_state and time.time() > st.session_state["expires_at"]:
+if strava_connected() and time.time() > st.session_state["expires_at"]:
     try:
         new_tokens = refresh_access_token(st.session_state["refresh_token"])
         st.session_state.update(new_tokens)
@@ -364,11 +483,12 @@ if data_mode == "Upload Files":
             latest_stream = df
 
 elif data_mode == "Strava":
-    if "access_token" in st.session_state:
+    if strava_connected():
         activities = get_activities(st.session_state["access_token"])
         for act in activities[:8]:
             if act.get("type") != "Ride":
                 continue
+
             streams = get_activity_streams(act["id"], st.session_state["access_token"])
             if not streams:
                 continue
@@ -400,9 +520,11 @@ elif data_mode == "Strava":
 if not history:
     if data_mode == "Strava":
         st.warning("No Strava ride history is loaded yet.")
-        render_coach_logic_state(strava_connected=False)
+        render_live_mode_section(resting_hr, max_hr)
+        render_coach_logic_state(is_strava_connected=False)
     else:
         st.warning("No uploaded ride history yet. Add your files to see how you did and what the coach recommends next.")
+        render_live_mode_section(resting_hr, max_hr)
     st.stop()
 
 history_df = pd.DataFrame(history)
@@ -466,20 +588,5 @@ summary_cols[1].metric("Last Avg HR", f"{history_df['avg_hr'].iloc[-1]:.0f} bpm"
 summary_cols[2].metric("Last Avg Fatigue", f"{history_df['avg_fatigue'].iloc[-1]:.1f}")
 summary_cols[3].metric("Days Since Ride", gap_days)
 
-st.subheader("Live Ride Mode")
-df_live = load_from_device()
-if df_live is None:
-    st.caption("No live device connected. The app stays fully usable without live data.")
-else:
-    df_live = compute_fatigue(finalize_stream_df(df_live), resting_hr, max_hr)
-    if st.button("Start Live Simulation"):
-        placeholder = st.empty()
-        for idx in range(0, len(df_live), 6):
-            row = df_live.iloc[idx]
-            with placeholder.container():
-                c1, c2 = st.columns(2)
-                c1.metric("Heart Rate", int(row["hr"]))
-                c2.metric("Fatigue", int(row["fatigue"]))
-            time.sleep(0.08)
-
-render_coach_logic_state(strava_connected="access_token" in st.session_state)
+render_live_mode_section(resting_hr, max_hr)
+render_coach_logic_state(is_strava_connected=strava_connected())
